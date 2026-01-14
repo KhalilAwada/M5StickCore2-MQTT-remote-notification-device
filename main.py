@@ -19,6 +19,7 @@ from hardware import sdcard
 import time
 import network
 import json
+from umqtt.simple import MQTTClient
 
 
 
@@ -28,8 +29,11 @@ github = None  # type: m5ui.M5Page
 github_list = None  # type: m5ui.M5List
 text = None  # type: m5ui.M5TextItem
 msgboxError = None  # type: m5ui.M5Msgbox
-ErrorMSGLBL = None  # type: m5ui.M5TextItem
-ErrorOKBTN = None  # type: m5ui.M5Button
+msgboxErrorMSGLBL = None  # type: m5ui.M5TextItem
+msgboxErrorOKBTN = None  # type: m5ui.M5Button
+msgboxLoading = None  # type: m5ui.M5Msgbox
+msgboxLoadingLabel = None  # type: m5ui.M5TextItem
+msgboxLoadingSpinner = None  # type: m5ui.M5Spinner
 github_page_title = None  # type: m5ui.M5Label
 dashboard_page_title = None  # type: m5ui.M5Label
 label0 = None  # type: m5ui.M5Label
@@ -37,6 +41,7 @@ label_kzz = None  # type: m5ui.M5TextItem
 
 # Network and Configuration (global - shared state)
 wlan_sta = None  # type: network.WLAN
+mqtt_client = None  # type: MQTTClient
 wifiCredsJSON = None  # type: list
 mqttCredsJSON = None  # type: dict
 mqttMessages = None
@@ -45,19 +50,22 @@ pageIndex = None  # type: int
 
 def reportError(errorMessage):
   """Display error message in UI msgbox"""
-  global msgboxError, ErrorMSGLBL, github_page_title
+  global msgboxError, msgboxErrorMSGLBL, github_page_title
   print('Error:', errorMessage)
-  ErrorMSGLBL.set_text(str(errorMessage))
+  msgboxErrorMSGLBL.set_text(str(errorMessage))
   msgboxError.set_flag(lv.obj.FLAG.HIDDEN, False)
   github_page_title.set_text(str(errorMessage))
 
 def showLoading(show, title):
-  """Show/hide loading indicator (placeholder for future implementation)"""
-  # No globals needed - only uses parameters
+  """Show/hide loading indicator with spinner"""
+  global msgboxLoading, msgboxLoadingLabel
   if show:
     print('Loading:', title)
+    msgboxLoadingLabel.set_text(str(title))
+    msgboxLoading.set_flag(lv.obj.FLAG.HIDDEN, False)
   else:
     print('Loading complete')
+    msgboxLoading.set_flag(lv.obj.FLAG.HIDDEN, True)
 
 def checkTime(x):
   """Check if current time is divisible by x (for periodic tasks)"""
@@ -92,7 +100,7 @@ def readSDFile(fileName, returnJSON):
     print(f'ERROR in readSDFile: {e}')
     sys.print_exception(e)
     reportError(f'Failed to load {fileName}: {e}')
-    returnValue = None
+    returnValue = [] if returnJSON else None
   
   showLoading(False, '')
   return returnValue
@@ -110,13 +118,14 @@ def connectWifi(credentials):
   wifi_map = {}
   for cred in credentials:
     wifi_map[cred['ssid']] = cred['password']
-    label0.set_text(f"Checking: {cred['ssid']}")
+    showLoading(True, f"Checking: {cred['ssid']}")
     time.sleep(1)
   
   wlan_sta.config(reconnects=5)
   wlan_sta.config(dhcp_hostname='m5stack')
   
   # Scan and connect to available network
+  showLoading(True, 'Scanning for networks...')
   while not wlan_sta.isconnected():
     for sta_record in wlan_sta.scan():
       ssid = sta_record[0].decode()
@@ -126,25 +135,46 @@ def connectWifi(credentials):
         showLoading(True, f'Connecting to {ssid}')
         wlan_sta.connect(ssid, wifi_map[ssid])
         time.sleep(5)
-        showLoading(False, '')
         if wlan_sta.isconnected():
           print(f'Connected to {ssid}')
-          label0.set_text(f'Connected: {ssid}')
+          showLoading(True, f'Connected: {ssid}')
+          time.sleep(3)
+          showLoading(False, '')
           return
+  
+  showLoading(False, '')
 
 
-def renderList():
-  """Render example list items (demo function)"""
-  global github_list
+def updateGitHubList():
+  """Update github_list with cached GitHub messages"""
+  global github_list, mqttMessages
   
-  # Demo data (local variable)
-  demo_data = '[{"id": 28, "Title": "Sweden"}, {"id": 56, "Title": "USA"}, {"id": 89, "Title": "England"}]'
-  items = json.loads(demo_data)
-  
-  for item in items:
-    label = github_list.add_text(f"{item['id']} - {item['Title']}")
-    label.move_background()
-    time.sleep(2)
+  try:
+    # Clear existing list items
+    github_list.clean()
+    
+    # Add cached messages to list
+    if mqttMessages:
+      for msg in mqttMessages:
+        # Get display text from lines array
+        if 'lines' in msg and len(msg['lines']) > 0:
+          display_text = '\n'.join(msg['lines'])
+        else:
+          display_text = f"{msg.get('repository', 'Unknown')} - {msg.get('type', 'event')}"
+        
+        # Get colors from message
+        text_color = int(msg.get('color', '0x000000'), 16) if isinstance(msg.get('color'), str) else msg.get('color', 0x000000)
+        bg_color = int(msg.get('bgColor', '0xffffff'), 16) if isinstance(msg.get('bgColor'), str) else msg.get('bgColor', 0xffffff)
+        
+        # Add text to list with colors
+        label = github_list.add_text(display_text, text_c=text_color, bg_c=bg_color)
+        label.move_background()
+    
+    print(f'Updated github_list with {len(mqttMessages) if mqttMessages else 0} messages')
+    
+  except Exception as e:
+    print(f'ERROR in updateGitHubList: {e}')
+    sys.print_exception(e)
 
 def loadMQTTMessages():
   """Load MQTT messages from SD card"""
@@ -156,8 +186,123 @@ def loadMQTTMessages():
   return messages
 
 
+def mqtt_callback(topic, msg):
+  """Handle incoming MQTT messages"""
+  print(f'MQTT Message - Topic: {topic.decode()}, Message: {msg.decode()}')
+  handleMQTTMessage(topic.decode(), msg.decode())
+
+
+def handleMQTTMessage(topic, message):
+  """
+  Process received MQTT messages
+  Args:
+    topic: The MQTT topic as string
+    message: The message payload as string
+  """
+  global github_page_title, label0, mqttMessages
+  
+  print(f'Processing MQTT - Topic: {topic}, Message: {message}')
+  
+  try:
+    # Try to parse message as JSON
+    msg_data = json.loads(message)
+    
+    # Check if this is a GitHub event message
+    if isinstance(msg_data, dict) and msg_data.get('messageType') == 'event' and msg_data.get('messageGroup') == 'github':
+      handleGitHubMessage(msg_data)
+    else:
+      # Handle other message types
+      if isinstance(msg_data, dict):
+        display_text = f"Topic: {topic}\n"
+        for key, value in msg_data.items():
+          display_text += f"{key}: {value}\n"
+        label0.set_text(display_text[:100])
+      else:
+        label0.set_text(f"{topic}:\n{str(msg_data)[:80]}")
+      
+      github_page_title.set_text(f"Latest: {topic}")
+    
+  except json.JSONDecodeError:
+    # Message is not JSON, display as plain text
+    label0.set_text(f"{topic}:\n{message[:80]}")
+    github_page_title.set_text(f"Msg: {message[:20]}")
+  except Exception as e:
+    print(f'ERROR in handleMQTTMessage: {e}')
+    sys.print_exception(e)
+
+
+def handleGitHubMessage(msg_data):
+  """
+  Handle GitHub event messages with caching and deduplication
+  Args:
+    msg_data: Parsed message data dict
+  """
+  global mqttMessages, github_page_title
+  
+  try:
+    # Extract unique ID
+    msg_id = msg_data.get('id')
+    if not msg_id:
+      print('WARNING: GitHub message has no id field')
+      return
+    
+    # Initialize mqttMessages if needed
+    if mqttMessages is None:
+      mqttMessages = []
+    
+    # Remove existing message with same ID (to override)
+    mqttMessages = [m for m in mqttMessages if m.get('id') != msg_id]
+    
+    # Add new message at the beginning (latest first)
+    mqttMessages.insert(0, msg_data)
+    
+    # Keep only last 15 messages
+    mqttMessages = mqttMessages[:15]
+    
+    # Save to SD card
+    saveMQTTMessagesToSD()
+    
+    # Update the github list with latest messages
+    updateGitHubList()
+    
+    # Update UI
+    if 'lines' in msg_data and len(msg_data['lines']) > 0:
+      display_text = '\n'.join(msg_data['lines'][:3])  # Show first 3 lines
+      github_page_title.set_text(display_text[:50])
+    else:
+      github_page_title.set_text(f"GitHub: {msg_data.get('repository', 'event')}")
+    
+    print(f"GitHub message cached: ID={msg_id}, Total messages={len(mqttMessages)}")
+    
+  except Exception as e:
+    print(f'ERROR in handleGitHubMessage: {e}')
+    sys.print_exception(e)
+
+
+def saveMQTTMessagesToSD():
+  """Save cached MQTT messages to SD card"""
+  global mqttMessages
+  
+  try:
+    if mqttMessages is None:
+      return
+    
+    # Convert to JSON string
+    json_str = json.dumps(mqttMessages)
+    
+    # Write to SD card
+    with open('/sd/mqtt-messages.json', 'w') as f:
+      f.write(json_str)
+    
+    print(f'Saved {len(mqttMessages)} messages to SD card')
+    
+  except Exception as e:
+    print(f'ERROR saving MQTT messages to SD: {e}')
+    sys.print_exception(e)
+
+
 # Event Handlers
-def ErrorOKBTN_released_event(event_struct):
+def msgboxErrorOKBTN_released_event(event_struct):
   """Handle error dialog OK button click"""
   global msgboxError
   msgboxError.set_flag(lv.obj.FLAG.HIDDEN, True)
@@ -169,19 +314,20 @@ def btnA_wasClicked_event(state):
   github.screen_load()
 
 
-def ErrorOKBTN_event_handler(event_struct):
+def msgboxErrorOKBTN_event_handler(event_struct):
   """LVGL event handler wrapper for error OK button"""
-  # No globals needed - delegates to ErrorOKBTN_released_event
+  # No globals needed - delegates to msgboxErrorOKBTN_released_event
   event = event_struct.code
   if event == lv.EVENT.RELEASED:
-    ErrorOKBTN_released_event(event_struct)
+    msgboxErrorOKBTN_released_event(event_struct)
   return
 
 def setup():
   """Initialize M5Stack, UI, and load configuration"""
-  global dashboard, github, github_list, text, msgboxError, ErrorMSGLBL, ErrorOKBTN
-  global github_page_title, dashboard_page_title, label0
-  global wlan_sta, wifiCredsJSON, mqttCredsJSON, mqttMessages, pageIndex
+  global dashboard, github, github_list, text, msgboxError, msgboxErrorMSGLBL, msgboxErrorOKBTN
+  global msgboxLoading, msgboxLoadingLabel, msgboxLoadingSpinner
+  global github_page_title, dashboard_page_title, label0, label_kzz
+  global wlan_sta, mqtt_client, wifiCredsJSON, mqttCredsJSON, mqttMessages, pageIndex
 
   # Initialize M5Stack and UI
   M5.begin()
@@ -198,17 +344,25 @@ def setup():
   github_page_title = m5ui.M5Label("Github", x=0, y=0, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=github)
   
   # Create UI elements on dashboard page
-  msgboxError = m5ui.M5Msgbox(title="Error", x=61, y=219, w=200, h=180, parent=dashboard)
-  ErrorMSGLBL = msgboxError.add_text("Error message will appear here")
-  ErrorOKBTN = msgboxError.add_button(text="OK", option="footer")
-  msgboxError.add_close_button()
-  msgboxError.set_flag(lv.obj.FLAG.HIDDEN, True)  # Hide by default
-  
   dashboard_page_title = m5ui.M5Label("Dashboard", x=0, y=0, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
   label0 = m5ui.M5Label("Initializing...", x=62, y=57, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  label_kzz = m5ui.M5Label("Line 1\nLine 2\nLine 3", x=62, y=120, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+
+  # Create global error dialog (accessible on all pages)
+  msgboxError = m5ui.M5Msgbox(title="Error", x=61, y=60, w=200, h=180)
+  msgboxErrorMSGLBL = msgboxError.add_text("Error message will appear here")
+  msgboxErrorOKBTN = msgboxError.add_button(text="OK", option="footer")
+  msgboxError.add_close_button()
+  msgboxError.set_flag(lv.obj.FLAG.HIDDEN, True)  # Hide by default
+
+  # Create global loading dialog (accessible on all pages)
+  msgboxLoading = m5ui.M5Msgbox(title="Loading", x=61, y=60, w=200, h=150)
+  msgboxLoadingLabel = msgboxLoading.add_text("Please wait...")
+  msgboxLoadingSpinner = m5ui.M5Spinner(x=85, y=90, w=30, h=30, parent=msgboxLoading)
+  msgboxLoading.set_flag(lv.obj.FLAG.HIDDEN, True)  # Hide by default
 
   # Setup event handlers
-  ErrorOKBTN.add_event_cb(ErrorOKBTN_event_handler, lv.EVENT.ALL, None)
+  msgboxErrorOKBTN.add_event_cb(msgboxErrorOKBTN_event_handler, lv.EVENT.ALL, None)
   BtnA.setCallback(type=BtnA.CB_TYPE.WAS_CLICKED, cb=btnA_wasClicked_event)
 
   # Initialize SD card
@@ -239,9 +393,42 @@ def setup():
   # Load MQTT messages
   mqttMessages = loadMQTTMessages()
   
+  # Update github list with loaded messages
+  if mqttMessages:
+    updateGitHubList()
+    print(f'Loaded and displayed {len(mqttMessages)} cached messages')
+  
   # Connect to WiFi if config available
   if wifiCredsJSON:
     connectWifi(wifiCredsJSON)
+  
+  # Initialize MQTT client if credentials are available and WiFi is connected
+  if mqttCredsJSON and wlan_sta.isconnected():
+    try:
+      showLoading(True, 'Connecting to MQTT...')
+      mqtt_client = MQTTClient(
+        mqttCredsJSON['client'],
+        mqttCredsJSON['server'],
+        port=int(mqttCredsJSON['port']),
+        user=mqttCredsJSON['username'],
+        password=mqttCredsJSON['password'],
+        keepalive=1000,
+        ssl=True,
+        ssl_params={"server_hostname": mqttCredsJSON['server']}
+      )
+      mqtt_client.set_callback(mqtt_callback)
+      mqtt_client.connect()
+      
+      # Subscribe to a topic (you can change this to your desired topic)
+      topic = mqttCredsJSON.get('topic', 'm5stack-notifications/github/all')
+      mqtt_client.subscribe(topic)
+      print(f'MQTT connected and subscribed to {topic}')
+      showLoading(False, '')
+    except Exception as e:
+      print(f'ERROR: MQTT setup failed: {e}')
+      sys.print_exception(e)
+      reportError(f'MQTT connection failed: {e}')
+      showLoading(False, '')
   
   pageIndex = 0
   print('Setup complete')
@@ -249,9 +436,16 @@ def setup():
 
 def loop():
   """Main application loop - runs continuously"""
-  global wlan_sta, label0, wifiCredsJSON
+  global wlan_sta, mqtt_client, label0, wifiCredsJSON
   
   M5.update()
+  
+  # Check for incoming MQTT messages
+  if mqtt_client:
+    try:
+      mqtt_client.check_msg()
+    except Exception as e:
+      print(f'MQTT check_msg error: {e}')
   
   # Check WiFi connection every 30 seconds
   if checkTime(30):
@@ -263,9 +457,9 @@ def loop():
       print('WiFi disconnected, reconnecting...')
       connectWifi(wifiCredsJSON)
   
-  # Render list every 60 seconds
-  if checkTime(60):
-    renderList()
+  # Update list display periodically (optional, only if needed)
+  # if checkTime(60):
+  #   updateGitHubList()
 
 
 if __name__ == '__main__':
