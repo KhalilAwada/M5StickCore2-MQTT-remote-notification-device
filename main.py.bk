@@ -1,0 +1,71 @@
+"""
+M5Stack Core 2 - Hello World Example
+UIFlow2 Firmware - Using M5UI Library
+
+IMPORTANT: This code uses M5UI (Widgets) library, NOT M5GFX.
+M5UI and M5GFX should not be mixed in the same project.
+
+This example demonstrates basic display and button functionality
+on the M5Stack Core 2 with UIFlow2 firmware.
+"""
+
+import M5
+from M5 import Widgets
+import time
+
+# Initialize M5Stack
+M5.begin()
+
+# Clear screen and set background
+Widgets.fillScreen(0x000000)
+
+# Display title
+title_label = Widgets.Label("M5Stack Core 2", 60, 20, 1.0, 0xFFFFFF, 0x000000, Widgets.FONTS.DejaVu24)
+ready_label = Widgets.Label("UIFlow2 Ready!", 70, 60, 1.0, 0x00FF00, 0x000000, Widgets.FONTS.DejaVu18)
+
+# Display instructions
+inst1_label = Widgets.Label("Touch screen to", 65, 120, 1.0, 0xFFFFFF, 0x000000, Widgets.FONTS.DejaVu18)
+inst2_label = Widgets.Label("see coordinates", 65, 145, 1.0, 0xFFFFFF, 0x000000, Widgets.FONTS.DejaVu18)
+
+# Labels for dynamic content
+coord_label = None
+count_label = None
+
+counter = 0
+
+def main_loop():
+    global counter, coord_label, count_label
+    
+    while True:
+        M5.update()
+        
+        # Check if screen is touched
+        if M5.Touch.getCount() > 0:
+            touch_detail = M5.Touch.getDetail(0)
+            x = touch_detail[1]
+            y = touch_detail[2]
+            
+            # Display touch coordinates (update existing label or create new)
+            coord_text = f"X: {x}, Y: {y}"
+            if coord_label:
+                coord_label.setText(coord_text)
+            else:
+                coord_label = Widgets.Label(coord_text, 80, 190, 1.0, 0xFFFF00, 0x000000, Widgets.FONTS.DejaVu18)
+            
+            counter += 1
+            
+            # Update counter (update existing label or create new)
+            count_text = f"Touches: {counter}"
+            if count_label:
+                count_label.setText(count_text)
+            else:
+                count_label = Widgets.Label(count_text, 95, 215, 1.0, 0x00FFFF, 0x000000, Widgets.FONTS.DejaVu18)
+        
+        time.sleep(0.05)
+
+# Run the main loop
+try:
+    main_loop()
+except KeyboardInterrupt:
+    print("Program stopped")
+    M5.end()

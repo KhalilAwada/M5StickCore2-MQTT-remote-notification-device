@@ -1,0 +1,20 @@
+# Core tools for ESP32/M5Stack development
+esptool>=4.7.0
+adafruit-ampy>=1.1.0
+mpremote>=1.22.0
+rshell>=0.0.31
+
+# Serial communication
+pyserial>=3.5
+
+# UIFlow2 / MicroPython development tools
+mpfshell>=0.9.3
+
+# Code quality and formatting
+black>=24.0.0
+pylint>=3.0.0
+autopep8>=2.0.0
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0

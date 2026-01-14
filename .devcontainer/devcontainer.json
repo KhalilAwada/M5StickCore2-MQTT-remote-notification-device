@@ -1,0 +1,39 @@
+{
+  "name": "M5Stack Core 2 Development",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.vscode-pylance",
+        "visualstudioexptteam.vscodeintellicode",
+        "ms-python.black-formatter",
+        "paulober.pico-w-go",
+        "alex-chen.vscode-m5stack-mpy-uiflow2"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.linting.enabled": true,
+        "python.linting.pylintEnabled": true,
+        "python.formatting.provider": "black",
+        "terminal.integrated.defaultProfile.linux": "bash"
+      }
+    }
+  },
+  "runArgs": [
+    "--privileged"
+  ],
+  "mounts": [
+    "source=/dev,target=/dev,type=bind"
+  ],
+  "postCreateCommand": "pip install --no-cache-dir -r requirements.txt",
+  "remoteUser": "root",
+  "features": {
+    "ghcr.io/devcontainers/features/python:1": {
+      "version": "3.11"
+    },
+    "ghcr.io/devcontainers/features/git:1": {}
+  }
+}

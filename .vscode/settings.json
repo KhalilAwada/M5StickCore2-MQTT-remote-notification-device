@@ -1,0 +1,19 @@
+{
+  "python.analysis.extraPaths": [
+    "${workspaceFolder}/stubs"
+  ],
+  "python.analysis.diagnosticSeverityOverrides": {
+    "reportMissingImports": "none",
+    "reportMissingModuleSource": "none",
+    "reportOptionalMemberAccess": "none",
+    "reportGeneralTypeIssues": "none",
+    "reportAttributeAccessIssue": "none"
+  },
+  "python.analysis.typeCheckingMode": "off",
+  "python.languageServer": "Pylance",
+  "python.linting.enabled": true,
+  "python.linting.pylintEnabled": false,
+  "files.associations": {
+    "*.py": "python"
+  }
+}
