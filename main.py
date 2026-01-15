@@ -139,10 +139,8 @@ def connectWifi(credentials):
           print(f'Connected to {ssid}')
           showLoading(True, f'Connected: {ssid}')
           time.sleep(3)
-          showLoading(False, '')
           return
   
-  showLoading(False, '')
 
 
 def updateGitHubList():
@@ -152,10 +150,14 @@ def updateGitHubList():
   try:
     # Clear existing list items
     github_list.clean()
+    github_list.set_style_pad_bottom(0, 0)
+    github_list.set_style_pad_top(0, 0)
+    github_list.set_style_pad_left(0, 0)
+    github_list.set_style_pad_right(0, 0)
     
     # Add cached messages to list
     if mqttMessages:
-      for msg in mqttMessages:
+      for i, msg in enumerate(mqttMessages):
         # Get display text from lines array
         if 'lines' in msg and len(msg['lines']) > 0:
           display_text = '\n'.join(msg['lines'])
@@ -166,10 +168,40 @@ def updateGitHubList():
         text_color = int(msg.get('color', '0x000000'), 16) if isinstance(msg.get('color'), str) else msg.get('color', 0x000000)
         bg_color = int(msg.get('bgColor', '0xffffff'), 16) if isinstance(msg.get('bgColor'), str) else msg.get('bgColor', 0xffffff)
         
-        # Add text to list with colors
-        label = github_list.add_text(display_text, text_c=text_color, bg_c=bg_color)
-        label.move_background()
-    
+        # Create a container for this list item (icon + text)
+        list_item = lv.obj(github_list)
+        list_item.set_width(310)  # Fixed width (list width minus padding)
+        list_item.set_height(lv.SIZE_CONTENT)  # Auto height based on children
+        list_item.set_style_bg_color(lv.color_hex(bg_color), 0)
+        list_item.set_style_bg_opa(255, 0)
+        list_item.set_style_border_width(0, 0)
+        list_item.set_style_pad_all(5, 0)
+        # list_item.set_style_pad_row(5, 0)
+        # list_item.set_style_pad_column(5, 0)
+        list_item.set_style_margin_bottom(0, 0)
+        list_item.set_style_margin_left(0, 0)
+        list_item.set_style_margin_right(0, 0)
+        list_item.set_style_margin_top(0, 0)
+
+        list_item.set_flex_flow(lv.FLEX_FLOW.ROW)
+        list_item.set_flex_align(lv.FLEX_ALIGN.START, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.START)
+        
+        # Add icon image to the container
+        try:
+          icon_path = msg.get('icon', 'github.png')
+          icon_path = f'/flash/res/img/{icon_path}' if not icon_path.startswith('/') else icon_path
+          icon = m5ui.M5Image(icon_path, x=0, y=0, rotation=0, scale_x=1.2, scale_y=1.2, parent=list_item)
+        except Exception as e:
+          print(f'Icon load failed for item {i}: {e}')
+        
+        # Add text label next to the icon (flexbox will position it automatically)
+        text_label = lv.label(list_item)
+        text_label.set_text(display_text[:200])  # Limit text length
+        text_label.set_width(280)  # Available width for text (adjusted for container width)
+        text_label.set_style_text_color(lv.color_hex(text_color), 0)
+        text_label.set_style_text_font(lv.font_montserrat_14, 0)
+        text_label.set_style_pad_left(5, 0)  # Space between icon and text
+        
     print(f'Updated github_list with {len(mqttMessages) if mqttMessages else 0} messages')
     
   except Exception as e:
@@ -340,6 +372,11 @@ def setup():
   
   # Create UI elements on github page
   github_list = m5ui.M5List(x=2, y=22, w=315, h=215, parent=github)
+  # Disable horizontal scrolling on the underlying LVGL object
+  try:
+    github_list._list.set_scroll_dir(lv.DIR.VER)  # Only vertical scroll
+  except:
+    pass  # If method not available, skip
   text = github_list.add_text("text")
   github_page_title = m5ui.M5Label("Github", x=0, y=0, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=github)
   
@@ -347,6 +384,21 @@ def setup():
   dashboard_page_title = m5ui.M5Label("Dashboard", x=0, y=0, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
   label0 = m5ui.M5Label("Initializing...", x=62, y=57, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
   label_kzz = m5ui.M5Label("Line 1\nLine 2\nLine 3", x=62, y=120, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  
+  # Test image loading
+  try:
+    test_image = m5ui.M5Image("/flash/res/img/github.png", x=10, y=180, rotation=0, scale_x=1, scale_y=1, parent=dashboard)
+    print('Test image loaded from flash')
+  except Exception as e:
+    print(f'Test image failed to load: {e}')
+    sys.print_exception(e)
+    # Try SD card fallback
+    try:
+      test_image = m5ui.M5Image("/sd/github.png", x=10, y=180, rotation=0, scale_x=1, scale_y=1, parent=dashboard)
+      print('Test image loaded from SD card')
+    except Exception as e2:
+      print(f'Test image SD fallback failed: {e2}')
+      sys.print_exception(e2)
 
   # Create global error dialog (accessible on all pages)
   msgboxError = m5ui.M5Msgbox(title="Error", x=61, y=60, w=200, h=180)
@@ -401,7 +453,8 @@ def setup():
   # Connect to WiFi if config available
   if wifiCredsJSON:
     connectWifi(wifiCredsJSON)
-  
+  showLoading(False, '')
+
   # Initialize MQTT client if credentials are available and WiFi is connected
   if mqttCredsJSON and wlan_sta.isconnected():
     try:
