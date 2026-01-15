@@ -54,18 +54,22 @@ def reportError(errorMessage):
   print('Error:', errorMessage)
   msgboxErrorMSGLBL.set_text(str(errorMessage))
   msgboxError.set_flag(lv.obj.FLAG.HIDDEN, False)
-  github_page_title.set_text(str(errorMessage))
+  # github_page_title.set_text(str(errorMessage))
 
 def showLoading(show, title):
   """Show/hide loading indicator with spinner"""
-  global msgboxLoading, msgboxLoadingLabel
+  global msgboxLoading, msgboxLoadingLabel, label0
   if show:
     print('Loading:', title)
+    label0.set_text(str(title))
     msgboxLoadingLabel.set_text(str(title))
     msgboxLoading.set_flag(lv.obj.FLAG.HIDDEN, False)
+    M5.update()  # Force UI refresh to show loading msgbox
   else:
     print('Loading complete')
+    label0.set_text('Loading complete')  # Clear any loading text
     msgboxLoading.set_flag(lv.obj.FLAG.HIDDEN, True)
+    M5.update()  # Force UI refresh to hide loading msgbox
 
 def checkTime(x):
   """Check if current time is divisible by x (for periodic tasks)"""
@@ -138,7 +142,7 @@ def connectWifi(credentials):
         if wlan_sta.isconnected():
           print(f'Connected to {ssid}')
           showLoading(True, f'Connected: {ssid}')
-          time.sleep(3)
+          time.sleep(2)
           return
   
 
@@ -150,14 +154,10 @@ def updateGitHubList():
   try:
     # Clear existing list items
     github_list.clean()
-    github_list.set_style_pad_bottom(0, 0)
-    github_list.set_style_pad_top(0, 0)
-    github_list.set_style_pad_left(0, 0)
-    github_list.set_style_pad_right(0, 0)
     
-    # Add cached messages to list
+    # Add cached messages to list (using simple m5ui method for better performance)
     if mqttMessages:
-      for i, msg in enumerate(mqttMessages):
+      for msg in mqttMessages:
         # Get display text from lines array
         if 'lines' in msg and len(msg['lines']) > 0:
           display_text = '\n'.join(msg['lines'])
@@ -168,39 +168,8 @@ def updateGitHubList():
         text_color = int(msg.get('color', '0x000000'), 16) if isinstance(msg.get('color'), str) else msg.get('color', 0x000000)
         bg_color = int(msg.get('bgColor', '0xffffff'), 16) if isinstance(msg.get('bgColor'), str) else msg.get('bgColor', 0xffffff)
         
-        # Create a container for this list item (icon + text)
-        list_item = lv.obj(github_list)
-        list_item.set_width(310)  # Fixed width (list width minus padding)
-        list_item.set_height(lv.SIZE_CONTENT)  # Auto height based on children
-        list_item.set_style_bg_color(lv.color_hex(bg_color), 0)
-        list_item.set_style_bg_opa(255, 0)
-        list_item.set_style_border_width(0, 0)
-        list_item.set_style_pad_all(5, 0)
-        # list_item.set_style_pad_row(5, 0)
-        # list_item.set_style_pad_column(5, 0)
-        list_item.set_style_margin_bottom(0, 0)
-        list_item.set_style_margin_left(0, 0)
-        list_item.set_style_margin_right(0, 0)
-        list_item.set_style_margin_top(0, 0)
-
-        list_item.set_flex_flow(lv.FLEX_FLOW.ROW)
-        list_item.set_flex_align(lv.FLEX_ALIGN.START, lv.FLEX_ALIGN.CENTER, lv.FLEX_ALIGN.START)
-        
-        # Add icon image to the container
-        try:
-          icon_path = msg.get('icon', 'github.png')
-          icon_path = f'/flash/res/img/{icon_path}' if not icon_path.startswith('/') else icon_path
-          icon = m5ui.M5Image(icon_path, x=0, y=0, rotation=0, scale_x=1.2, scale_y=1.2, parent=list_item)
-        except Exception as e:
-          print(f'Icon load failed for item {i}: {e}')
-        
-        # Add text label next to the icon (flexbox will position it automatically)
-        text_label = lv.label(list_item)
-        text_label.set_text(display_text[:200])  # Limit text length
-        text_label.set_width(280)  # Available width for text (adjusted for container width)
-        text_label.set_style_text_color(lv.color_hex(text_color), 0)
-        text_label.set_style_text_font(lv.font_montserrat_14, 0)
-        text_label.set_style_pad_left(5, 0)  # Space between icon and text
+        # Add text to list with colors using simple m5ui method (much faster)
+        github_list.add_text(display_text[:350], text_c=text_color, bg_c=bg_color)
         
     print(f'Updated github_list with {len(mqttMessages) if mqttMessages else 0} messages')
     
@@ -252,12 +221,12 @@ def handleMQTTMessage(topic, message):
       else:
         label0.set_text(f"{topic}:\n{str(msg_data)[:80]}")
       
-      github_page_title.set_text(f"Latest: {topic}")
+      # github_page_title.set_text(f"Latest: {topic}")
     
   except json.JSONDecodeError:
     # Message is not JSON, display as plain text
     label0.set_text(f"{topic}:\n{message[:80]}")
-    github_page_title.set_text(f"Msg: {message[:20]}")
+    # github_page_title.set_text(f"Msg: {message[:20]}")
   except Exception as e:
     print(f'ERROR in handleMQTTMessage: {e}')
     sys.print_exception(e)
@@ -277,6 +246,9 @@ def handleGitHubMessage(msg_data):
     if not msg_id:
       print('WARNING: GitHub message has no id field')
       return
+    
+    # Play notification sound
+    playNotificationSound(msg_data)
     
     # Initialize mqttMessages if needed
     if mqttMessages is None:
@@ -300,9 +272,9 @@ def handleGitHubMessage(msg_data):
     # Update UI
     if 'lines' in msg_data and len(msg_data['lines']) > 0:
       display_text = '\n'.join(msg_data['lines'][:3])  # Show first 3 lines
-      github_page_title.set_text(display_text[:50])
-    else:
-      github_page_title.set_text(f"GitHub: {msg_data.get('repository', 'event')}")
+      # github_page_title.set_text(display_text[:50])
+    # else:
+      # github_page_title.set_text(f"GitHub: {msg_data.get('repository', 'event')}")
     
     print(f"GitHub message cached: ID={msg_id}, Total messages={len(mqttMessages)}")
     
@@ -330,6 +302,53 @@ def saveMQTTMessagesToSD():
     
   except Exception as e:
     print(f'ERROR saving MQTT messages to SD: {e}')
+    sys.print_exception(e)
+
+
+def playNotificationSound(msg_data):
+  """Play notification sound based on message status and conclusion"""
+  try:
+    status = msg_data.get('status')
+    conclusion = msg_data.get('conclusion')
+    
+    if status == 'completed' and conclusion == 'success':
+      # Happy sound - cheerful ascending melody
+      M5.Speaker.tone(523, 80)  # C
+      time.sleep(0.08)
+      M5.Speaker.tone(659, 80)  # E
+      time.sleep(0.08)
+      M5.Speaker.tone(784, 80)  # G
+      time.sleep(0.08)
+      M5.Speaker.tone(1047, 150)  # C (high)
+      time.sleep(0.15)
+      M5.Speaker.tone(1047, 80)  # C (high) repeat
+      time.sleep(0.08)
+      M5.Speaker.tone(784, 120)  # G
+    elif status == 'completed' and conclusion != 'success':
+      # Sad sound - descending tones with longer duration
+      M5.Speaker.tone(659, 150)  # E
+      time.sleep(0.15)
+      M5.Speaker.tone(587, 150)  # D
+      time.sleep(0.15)
+      M5.Speaker.tone(523, 150)  # C
+      time.sleep(0.15)
+      M5.Speaker.tone(392, 250)  # G (low)
+      time.sleep(0.25)
+      M5.Speaker.tone(330, 300)  # E (low)
+    else:
+      # Regular notification - distinct pattern
+      M5.Speaker.tone(880, 100)  # A
+      time.sleep(0.1)
+      M5.Speaker.tone(1047, 100)  # C
+      time.sleep(0.1)
+      M5.Speaker.tone(880, 100)  # A
+      time.sleep(0.2)
+      M5.Speaker.tone(1047, 150)  # C
+    
+    print(f'Played notification sound: status={status}, conclusion={conclusion}')
+    
+  except Exception as e:
+    print(f'ERROR playing notification sound: {e}')
     sys.print_exception(e)
 
 
@@ -453,7 +472,6 @@ def setup():
   # Connect to WiFi if config available
   if wifiCredsJSON:
     connectWifi(wifiCredsJSON)
-  showLoading(False, '')
 
   # Initialize MQTT client if credentials are available and WiFi is connected
   if mqttCredsJSON and wlan_sta.isconnected():
