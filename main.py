@@ -13,6 +13,8 @@ Features:
 import os, sys, io
 import M5
 from M5 import BtnA
+from M5 import BtnB
+from M5 import BtnC
 import m5ui
 import lvgl as lv
 from hardware import sdcard
@@ -20,6 +22,68 @@ import time
 import network
 import json
 from umqtt.simple import MQTTClient
+
+
+class LoadingOverlay:
+  """Reusable loading overlay with dimmed background, centered box, label and spinner"""
+  
+  def __init__(self, parent):
+    """Create loading overlay on the specified parent page
+    
+    Args:
+      parent: The parent LVGL object (typically a page) to attach the overlay to
+    """
+    # Create full-screen overlay with semi-transparent background
+    self.overlay = lv.obj(parent)
+    self.overlay.set_size(320, 240)  # Full screen
+    self.overlay.set_pos(0, 0)
+    self.overlay.set_style_bg_color(lv.color_hex(0x000000), 0)
+    self.overlay.set_style_bg_opa(150, 0)  # Semi-transparent black
+    self.overlay.set_style_border_width(0, 0)
+    self.overlay.add_flag(lv.obj.FLAG.HIDDEN)  # Hide by default
+    
+    # Create centered loading box
+    self.box = lv.obj(self.overlay)
+    self.box.set_size(200, 150)
+    self.box.align(lv.ALIGN.CENTER, 0, 0)
+    self.box.set_style_bg_color(lv.color_hex(0xFFFFFF), 0)
+    self.box.set_style_bg_opa(255, 0)
+    self.box.set_style_border_color(lv.color_hex(0xCCCCCC), 0)
+    self.box.set_style_border_width(2, 0)
+    self.box.set_style_radius(10, 0)
+    self.box.set_style_pad_all(20, 0)
+    
+    # Create label centered at top of box
+    self.label = lv.label(self.box)
+    self.label.set_text("Loading...")
+    self.label.set_style_text_color(lv.color_hex(0x000000), 0)
+    self.label.align(lv.ALIGN.TOP_MID, 0, 10)
+    
+    # Create spinner centered in box
+    self.spinner = lv.spinner(self.box)
+    self.spinner.set_size(60, 60)
+    self.spinner.align(lv.ALIGN.CENTER, 0, 10)
+  
+  def show(self, text="Loading..."):
+    """Show the loading overlay with specified text
+    
+    Args:
+      text: The text to display in the loading label (default: "Loading...")
+    """
+    self.label.set_text(text)
+    self.overlay.remove_flag(lv.obj.FLAG.HIDDEN)
+  
+  def hide(self):
+    """Hide the loading overlay"""
+    self.overlay.add_flag(lv.obj.FLAG.HIDDEN)
+  
+  def set_text(self, text):
+    """Update the loading text without hiding/showing
+    
+    Args:
+      text: The new text to display
+    """
+    self.label.set_text(text)
 
 
 
@@ -31,13 +95,17 @@ text = None  # type: m5ui.M5TextItem
 msgboxError = None  # type: m5ui.M5Msgbox
 msgboxErrorMSGLBL = None  # type: m5ui.M5TextItem
 msgboxErrorOKBTN = None  # type: m5ui.M5Button
-msgboxLoading = None  # type: m5ui.M5Msgbox
-msgboxLoadingLabel = None  # type: m5ui.M5TextItem
-msgboxLoadingSpinner = None  # type: m5ui.M5Spinner
+loadingOverlay = None  # type: LoadingOverlay
 github_page_title = None  # type: m5ui.M5Label
+github_page_icon = None  # type: m5ui.M5Image
 dashboard_page_title = None  # type: m5ui.M5Label
-label0 = None  # type: m5ui.M5Label
-label_kzz = None  # type: m5ui.M5TextItem
+label_wifi_status = None  # type: m5ui.M5Label
+label_mqtt_status = None  # type: m5ui.M5Label
+label_msg_count = None  # type: m5ui.M5Label
+
+label_ip_address = None  # type: m5ui.M5Label
+label_wifi_strength = None  # type: m5ui.M5Label
+label_battery = None  # type: m5ui.M5Label
 
 # Network and Configuration (global - shared state)
 wlan_sta = None  # type: network.WLAN
@@ -46,6 +114,13 @@ wifiCredsJSON = None  # type: list
 mqttCredsJSON = None  # type: dict
 mqttMessages = None
 pageIndex = None  # type: int
+
+# Screen power management
+SCREEN_BRIGHTNESS_NORMAL = 200  # Full brightness
+SCREEN_BRIGHTNESS_DIM = 30  # Dimmed brightness
+SCREEN_DIM_TIMEOUT = 30  # Dim after 30 seconds
+SCREEN_OFF_TIMEOUT = 120  # Turn off after 2 minutes
+last_activity_time = None  # type: float
 
 
 def reportError(errorMessage):
@@ -58,23 +133,28 @@ def reportError(errorMessage):
 
 def showLoading(show, title):
   """Show/hide loading indicator with spinner"""
-  global msgboxLoading, msgboxLoadingLabel, label0
+  global loadingOverlay
   if show:
     print('Loading:', title)
-    label0.set_text(str(title))
-    msgboxLoadingLabel.set_text(str(title))
-    msgboxLoading.set_flag(lv.obj.FLAG.HIDDEN, False)
-    M5.update()  # Force UI refresh to show loading msgbox
+    loadingOverlay.show(str(title))
+    M5.update()  # Force UI refresh to show loading
   else:
     print('Loading complete')
-    label0.set_text('Loading complete')  # Clear any loading text
-    msgboxLoading.set_flag(lv.obj.FLAG.HIDDEN, True)
-    M5.update()  # Force UI refresh to hide loading msgbox
+    loadingOverlay.hide()
+    M5.update()  # Force UI refresh to hide loading
 
 def checkTime(x):
   """Check if current time is divisible by x (for periodic tasks)"""
   # No globals needed - pure function
   return (time.time()) % (int(x)) == 0
+
+
+def wakeScreen():
+  """Wake screen and reset inactivity timer"""
+  global last_activity_time
+  last_activity_time = time.time()
+  M5.Display.setBrightness(SCREEN_BRIGHTNESS_NORMAL)
+  print('Screen woke up')
 
 
 def readSDFile(fileName, returnJSON):
@@ -116,7 +196,7 @@ def connectWifi(credentials):
   Args:
     credentials: List of dicts with 'ssid' and 'password' keys
   """
-  global wlan_sta, label0
+  global wlan_sta, label_wifi_status
   
   # Build WiFi credentials map (local variable)
   wifi_map = {}
@@ -169,7 +249,13 @@ def updateGitHubList():
         bg_color = int(msg.get('bgColor', '0xffffff'), 16) if isinstance(msg.get('bgColor'), str) else msg.get('bgColor', 0xffffff)
         
         # Add text to list with colors using simple m5ui method (much faster)
-        github_list.add_text(display_text[:350], text_c=text_color, bg_c=bg_color)
+        label = github_list.add_text(display_text[:350], text_c=text_color, bg_c=bg_color)
+        
+        # Add 2px bottom margin to create spacing between items
+        try:
+          label.set_style_margin_bottom(2, 0)
+        except:
+          pass
         
     print(f'Updated github_list with {len(mqttMessages) if mqttMessages else 0} messages')
     
@@ -183,6 +269,8 @@ def loadMQTTMessages():
   
   messages = readSDFile('mqtt-messages.json', True)
   if messages:
+    # Limit to 8 messages for consistency and performance
+    messages = messages[:5]
     github_page_title.set_text('MQTT Messages Loaded')
   return messages
 
@@ -200,7 +288,7 @@ def handleMQTTMessage(topic, message):
     topic: The MQTT topic as string
     message: The message payload as string
   """
-  global github_page_title, label0, mqttMessages
+  global github_page_title, label_mqtt_status, mqttMessages
   
   print(f'Processing MQTT - Topic: {topic}, Message: {message}')
   
@@ -217,15 +305,15 @@ def handleMQTTMessage(topic, message):
         display_text = f"Topic: {topic}\n"
         for key, value in msg_data.items():
           display_text += f"{key}: {value}\n"
-        label0.set_text(display_text[:100])
+        label_mqtt_status.set_text(display_text[:100])
       else:
-        label0.set_text(f"{topic}:\n{str(msg_data)[:80]}")
+        label_mqtt_status.set_text(f"{topic}:\n{str(msg_data)[:80]}")
       
       # github_page_title.set_text(f"Latest: {topic}")
     
   except json.JSONDecodeError:
     # Message is not JSON, display as plain text
-    label0.set_text(f"{topic}:\n{message[:80]}")
+    label_mqtt_status.set_text(f"{topic}:\n{message[:80]}")
     # github_page_title.set_text(f"Msg: {message[:20]}")
   except Exception as e:
     print(f'ERROR in handleMQTTMessage: {e}')
@@ -247,6 +335,9 @@ def handleGitHubMessage(msg_data):
       print('WARNING: GitHub message has no id field')
       return
     
+    # Wake screen on new message
+    wakeScreen()
+    
     # Play notification sound
     playNotificationSound(msg_data)
     
@@ -260,8 +351,8 @@ def handleGitHubMessage(msg_data):
     # Add new message at the beginning (latest first)
     mqttMessages.insert(0, msg_data)
     
-    # Keep only last 15 messages
-    mqttMessages = mqttMessages[:15]
+    # Keep only last 8 messages (reduced from 15 for better performance)
+    mqttMessages = mqttMessages[:5]
     
     # Save to SD card
     saveMQTTMessagesToSD()
@@ -303,6 +394,56 @@ def saveMQTTMessagesToSD():
   except Exception as e:
     print(f'ERROR saving MQTT messages to SD: {e}')
     sys.print_exception(e)
+
+
+def connectMQTT():
+  """Connect or reconnect to MQTT broker"""
+  global mqtt_client, mqttCredsJSON, wlan_sta
+  
+  if not mqttCredsJSON:
+    print('No MQTT credentials available')
+    return False
+  
+  if not wlan_sta.isconnected():
+    print('WiFi not connected, cannot connect to MQTT')
+    return False
+  
+  try:
+    showLoading(True, 'Connecting to MQTT...')
+    
+    # Close existing connection if any
+    if mqtt_client:
+      try:
+        mqtt_client.disconnect()
+      except:
+        pass
+    
+    # Create new MQTT client
+    mqtt_client = MQTTClient(
+      mqttCredsJSON['client'],
+      mqttCredsJSON['server'],
+      port=int(mqttCredsJSON['port']),
+      user=mqttCredsJSON['username'],
+      password=mqttCredsJSON['password'],
+      keepalive=1000,
+      ssl=True,
+      ssl_params={"server_hostname": mqttCredsJSON['server']}
+    )
+    mqtt_client.set_callback(mqtt_callback)
+    mqtt_client.connect()
+    
+    # Subscribe to topic
+    topic = mqttCredsJSON.get('topic', 'm5stack-notifications/github/all')
+    mqtt_client.subscribe(topic)
+    print(f'MQTT connected and subscribed to {topic}')
+    showLoading(False, '')
+    return True
+    
+  except Exception as e:
+    print(f'ERROR: MQTT connection failed: {e}')
+    sys.print_exception(e)
+    showLoading(False, '')
+    return False
 
 
 def playNotificationSound(msg_data):
@@ -352,6 +493,14 @@ def playNotificationSound(msg_data):
     sys.print_exception(e)
 
 
+def playClickSound():
+  """Play button click sound"""
+  try:
+    M5.Speaker.tone(1000, 50)
+  except Exception as e:
+    print(f'ERROR playing click sound: {e}')
+
+
 # Event Handlers
 def msgboxErrorOKBTN_released_event(event_struct):
   """Handle error dialog OK button click"""
@@ -360,8 +509,24 @@ def msgboxErrorOKBTN_released_event(event_struct):
 
 
 def btnA_wasClicked_event(state):
-  """Handle Button A click - switch to github page"""
+  """Handle Button A click - switch to dashboard page"""
+  global dashboard
+  playClickSound()
+  wakeScreen()
+  dashboard.screen_load()
+
+def btnB_wasClicked_event(state):
+  """Handle Button B click - switch to github page"""
   global github
+  playClickSound()
+  wakeScreen()
+  github.screen_load()
+
+def btnC_wasClicked_event(state):
+  """Handle Button C click - switch to Actions page"""
+  global github
+  playClickSound()
+  wakeScreen()
   github.screen_load()
 
 
@@ -376,14 +541,20 @@ def msgboxErrorOKBTN_event_handler(event_struct):
 def setup():
   """Initialize M5Stack, UI, and load configuration"""
   global dashboard, github, github_list, text, msgboxError, msgboxErrorMSGLBL, msgboxErrorOKBTN
-  global msgboxLoading, msgboxLoadingLabel, msgboxLoadingSpinner
-  global github_page_title, dashboard_page_title, label0, label_kzz
+  global loadingOverlay
+  global github_page_title, dashboard_page_title, label_wifi_status, label_mqtt_status, label_msg_count
+  global label_ip_address, label_wifi_strength, label_battery
   global wlan_sta, mqtt_client, wifiCredsJSON, mqttCredsJSON, mqttMessages, pageIndex
+  global last_activity_time
 
   # Initialize M5Stack and UI
   M5.begin()
   M5.Widgets.setRotation(1)
   m5ui.init()
+  
+  # Set initial brightness and activity time
+  M5.Display.setBrightness(SCREEN_BRIGHTNESS_NORMAL)
+  last_activity_time = time.time()
   
   # Create pages
   dashboard = m5ui.M5Page(bg_c=0xffffff)
@@ -394,30 +565,39 @@ def setup():
   # Disable horizontal scrolling on the underlying LVGL object
   try:
     github_list._list.set_scroll_dir(lv.DIR.VER)  # Only vertical scroll
+
+    # Disable scroll elasticity and momentum for better performance
+    github_list._list.remove_flag(lv.obj.FLAG.SCROLL_ELASTIC)
+    github_list._list.remove_flag(lv.obj.FLAG.SCROLL_MOMENTUM)
+    
+    # Add 2px padding between list items
+    github_list._list.set_style_pad_row(2, 0)
   except:
     pass  # If method not available, skip
   text = github_list.add_text("text")
-  github_page_title = m5ui.M5Label("Github", x=0, y=0, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=github)
-  
+  github_page_title = m5ui.M5Label("Github", x=20, y=1, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=github)
+  github_page_icon = m5ui.M5Image("/flash/res/img/github.png", x=1, y=1, rotation=0, scale_x=1, scale_y=1, parent=github)
+
   # Create UI elements on dashboard page
   dashboard_page_title = m5ui.M5Label("Dashboard", x=0, y=0, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
-  label0 = m5ui.M5Label("Initializing...", x=62, y=57, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
-  label_kzz = m5ui.M5Label("Line 1\nLine 2\nLine 3", x=62, y=120, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  label_wifi_status = m5ui.M5Label("WiFi: Initializing...", x=10, y=30, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  label_mqtt_status = m5ui.M5Label("MQTT: Initializing...", x=10, y=50, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  label_msg_count = m5ui.M5Label("Messages: 0", x=10, y=70, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  label_ip_address = m5ui.M5Label("IP: ---.---.---.---", x=10, y=90, text_c=0x0000ff, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  label_wifi_strength = m5ui.M5Label("Signal: --- dBm", x=10, y=110, text_c=0x008000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  label_battery = m5ui.M5Label("Battery: ---%", x=10, y=130, text_c=0xff6600, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  
+  # Create loading overlay using the LoadingOverlay class
+  loadingOverlay = LoadingOverlay(dashboard)
   
   # Test image loading
   try:
-    test_image = m5ui.M5Image("/flash/res/img/github.png", x=10, y=180, rotation=0, scale_x=1, scale_y=1, parent=dashboard)
     print('Test image loaded from flash')
   except Exception as e:
     print(f'Test image failed to load: {e}')
     sys.print_exception(e)
     # Try SD card fallback
-    try:
-      test_image = m5ui.M5Image("/sd/github.png", x=10, y=180, rotation=0, scale_x=1, scale_y=1, parent=dashboard)
-      print('Test image loaded from SD card')
-    except Exception as e2:
-      print(f'Test image SD fallback failed: {e2}')
-      sys.print_exception(e2)
+ 
 
   # Create global error dialog (accessible on all pages)
   msgboxError = m5ui.M5Msgbox(title="Error", x=61, y=60, w=200, h=180)
@@ -426,15 +606,11 @@ def setup():
   msgboxError.add_close_button()
   msgboxError.set_flag(lv.obj.FLAG.HIDDEN, True)  # Hide by default
 
-  # Create global loading dialog (accessible on all pages)
-  msgboxLoading = m5ui.M5Msgbox(title="Loading", x=61, y=60, w=200, h=150)
-  msgboxLoadingLabel = msgboxLoading.add_text("Please wait...")
-  msgboxLoadingSpinner = m5ui.M5Spinner(x=85, y=90, w=30, h=30, parent=msgboxLoading)
-  msgboxLoading.set_flag(lv.obj.FLAG.HIDDEN, True)  # Hide by default
-
   # Setup event handlers
   msgboxErrorOKBTN.add_event_cb(msgboxErrorOKBTN_event_handler, lv.EVENT.ALL, None)
   BtnA.setCallback(type=BtnA.CB_TYPE.WAS_CLICKED, cb=btnA_wasClicked_event)
+  BtnB.setCallback(type=BtnB.CB_TYPE.WAS_CLICKED, cb=btnB_wasClicked_event)
+  BtnC.setCallback(type=BtnC.CB_TYPE.WAS_CLICKED, cb=btnC_wasClicked_event)
 
   # Initialize SD card
   try:
@@ -457,9 +633,9 @@ def setup():
   
   # Display loaded config (for debugging)
   if wifiCredsJSON:
-    label0.set_text('WiFi config loaded')
+    label_wifi_status.set_text('WiFi: Config loaded')
   else:
-    label0.set_text('No WiFi config found')
+    label_wifi_status.set_text('WiFi: No config found')
   
   # Load MQTT messages
   mqttMessages = loadMQTTMessages()
@@ -475,31 +651,8 @@ def setup():
 
   # Initialize MQTT client if credentials are available and WiFi is connected
   if mqttCredsJSON and wlan_sta.isconnected():
-    try:
-      showLoading(True, 'Connecting to MQTT...')
-      mqtt_client = MQTTClient(
-        mqttCredsJSON['client'],
-        mqttCredsJSON['server'],
-        port=int(mqttCredsJSON['port']),
-        user=mqttCredsJSON['username'],
-        password=mqttCredsJSON['password'],
-        keepalive=1000,
-        ssl=True,
-        ssl_params={"server_hostname": mqttCredsJSON['server']}
-      )
-      mqtt_client.set_callback(mqtt_callback)
-      mqtt_client.connect()
-      
-      # Subscribe to a topic (you can change this to your desired topic)
-      topic = mqttCredsJSON.get('topic', 'm5stack-notifications/github/all')
-      mqtt_client.subscribe(topic)
-      print(f'MQTT connected and subscribed to {topic}')
-      showLoading(False, '')
-    except Exception as e:
-      print(f'ERROR: MQTT setup failed: {e}')
-      sys.print_exception(e)
-      reportError(f'MQTT connection failed: {e}')
-      showLoading(False, '')
+    if not connectMQTT():
+      reportError('MQTT connection failed')
   
   pageIndex = 0
   print('Setup complete')
@@ -507,9 +660,45 @@ def setup():
 
 def loop():
   """Main application loop - runs continuously"""
-  global wlan_sta, mqtt_client, label0, wifiCredsJSON
+  global wlan_sta, mqtt_client, label_wifi_status, label_mqtt_status, label_msg_count
+  global label_ip_address, label_wifi_strength, label_battery, wifiCredsJSON, mqttCredsJSON
+  global last_activity_time
   
   M5.update()
+  
+  # Check for screen touch to wake display
+  if M5.Touch.getCount() > 0:
+    wakeScreen()
+  
+  # Auto-dim screen based on inactivity (only when on battery power)
+  if last_activity_time:
+    # Check if device is on external power
+    try:
+      is_charging = M5.Power.isCharging()
+    except:
+      is_charging = False  # Assume battery if unable to detect
+    
+    if is_charging:
+      # Keep screen at full brightness when plugged in
+      current_brightness = M5.Display.getBrightness()
+      if current_brightness != SCREEN_BRIGHTNESS_NORMAL:
+        M5.Display.setBrightness(SCREEN_BRIGHTNESS_NORMAL)
+        print('On external power - screen stays bright')
+    else:
+      # On battery - apply dimming logic
+      elapsed = time.time() - last_activity_time
+      current_brightness = M5.Display.getBrightness()
+      
+      if elapsed > SCREEN_OFF_TIMEOUT:
+        # Turn off backlight after timeout
+        if current_brightness != 0:
+          M5.Display.setBrightness(0)
+          print(f'Screen off after {elapsed:.0f}s inactivity (battery)')
+      elif elapsed > SCREEN_DIM_TIMEOUT:
+        # Dim screen after timeout
+        if current_brightness != SCREEN_BRIGHTNESS_DIM:
+          M5.Display.setBrightness(SCREEN_BRIGHTNESS_DIM)
+          print(f'Screen dimmed after {elapsed:.0f}s inactivity (battery)')
   
   # Check for incoming MQTT messages
   if mqtt_client:
@@ -517,16 +706,84 @@ def loop():
       mqtt_client.check_msg()
     except Exception as e:
       print(f'MQTT check_msg error: {e}')
+      # Mark client as disconnected on error
+      mqtt_client = None
   
-  # Check WiFi connection every 30 seconds
-  if checkTime(30):
-    status = 'Connected' if wlan_sta.isconnected() else 'Disconnected'
-    label0.set_text(f'{status} - {time.time()}')
+  # Update dashboard info every 10 seconds
+  if checkTime(10):
+    # Update connection status
+    wifi_status = 'Connected' if wlan_sta.isconnected() else 'Disconnected'
+    mqtt_status = 'Connected' if mqtt_client else 'Disconnected'
+    msg_count = len(mqttMessages) if mqttMessages else 0
+    label_wifi_status.set_text(f'WiFi: {wifi_status}')
+    label_mqtt_status.set_text(f'MQTT: {mqtt_status}')
+    label_msg_count.set_text(f'Messages: {msg_count}')
     
-    # Reconnect if disconnected
+    # Update battery level
+    try:
+      battery_level = M5.Power.getBatteryLevel()
+      is_charging = M5.Power.isCharging()
+      charging_icon = ' [CHG]' if is_charging else ''
+      
+      # Color code based on battery level
+      if battery_level >= 80:
+        battery_color = 0x00ff00  # Green - High
+      elif battery_level >= 50:
+        battery_color = 0x80ff00  # Yellow-green - Medium
+      elif battery_level >= 20:
+        battery_color = 0xffa500  # Orange - Low
+      else:
+        battery_color = 0xff0000  # Red - Critical
+      
+      label_battery.set_style_text_color(lv.color_hex(battery_color), 0)
+      label_battery.set_text(f'Battery: {battery_level}%{charging_icon}')
+    except Exception as e:
+      label_battery.set_text('Battery: N/A')
+      print(f'Error reading battery: {e}')
+    
+    # Update IP address
+    if wlan_sta.isconnected():
+      ip_info = wlan_sta.ifconfig()
+      ip_address = ip_info[0]
+      label_ip_address.set_text(f'IP: {ip_address}')
+      
+      # Update WiFi signal strength
+      try:
+        rssi = wlan_sta.status('rssi')
+        # Color code based on signal strength
+        if rssi >= -50:
+          signal_color = 0x00ff00  # Green - Excellent
+          signal_text = 'Excellent'
+        elif rssi >= -60:
+          signal_color = 0x80ff00  # Yellow-green - Good
+          signal_text = 'Good'
+        elif rssi >= -70:
+          signal_color = 0xffa500  # Orange - Fair
+          signal_text = 'Fair'
+        else:
+          signal_color = 0xff0000  # Red - Weak
+          signal_text = 'Weak'
+        
+        label_wifi_strength.set_style_text_color(lv.color_hex(signal_color), 0)
+        label_wifi_strength.set_text(f'Signal: {rssi} dBm ({signal_text})')
+      except Exception as e:
+        label_wifi_strength.set_text(f'Signal: N/A')
+        print(f'Error reading WiFi signal: {e}')
+    else:
+      label_ip_address.set_text('IP: Not connected')
+      label_wifi_strength.set_text('Signal: Not connected')
+  
+  # Check WiFi and MQTT connection every 30 seconds for reconnection
+  if checkTime(30):
+    # Reconnect WiFi if disconnected
     if not wlan_sta.isconnected() and wifiCredsJSON:
       print('WiFi disconnected, reconnecting...')
       connectWifi(wifiCredsJSON)
+    
+    # Reconnect MQTT if disconnected but WiFi is connected
+    if not mqtt_client and wlan_sta.isconnected() and mqttCredsJSON:
+      print('MQTT disconnected, reconnecting...')
+      connectMQTT()
   
   # Update list display periodically (optional, only if needed)
   # if checkTime(60):

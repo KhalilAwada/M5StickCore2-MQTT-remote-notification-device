@@ -1,0 +1,7 @@
+{
+    "client": "M5StackCore2Client",
+    "server": "mqtt.stardust.applink.ninja",
+    "port": "8883",
+    "username": "applink",
+    "password": "@PPL!NK123"
+}
