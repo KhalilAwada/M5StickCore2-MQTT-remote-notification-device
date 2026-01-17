@@ -90,6 +90,9 @@ class LoadingOverlay:
 # UI Components (global - used across multiple functions)
 dashboard = None  # type: m5ui.M5Page
 github = None  # type: m5ui.M5Page
+menu = None  # type: m5ui.M5Page
+settings = None  # type: m5ui.M5Page
+khadamaty = None  # type: m5ui.M5Page
 github_list = None  # type: m5ui.M5List
 text = None  # type: m5ui.M5TextItem
 msgboxError = None  # type: m5ui.M5Msgbox
@@ -99,6 +102,11 @@ loadingOverlay = None  # type: LoadingOverlay
 github_page_title = None  # type: m5ui.M5Label
 github_page_icon = None  # type: m5ui.M5Image
 dashboard_page_title = None  # type: m5ui.M5Label
+menu_page_title = None  # type: m5ui.M5Label
+menu_settings_btn = None  # type: m5ui.M5Button
+menu_khadamaty_btn = None  # type: m5ui.M5Button
+settings_page_title = None  # type: m5ui.M5Label
+khadamaty_page_title = None  # type: m5ui.M5Label
 label_wifi_status = None  # type: m5ui.M5Label
 label_mqtt_status = None  # type: m5ui.M5Label
 label_msg_count = None  # type: m5ui.M5Label
@@ -523,12 +531,26 @@ def btnB_wasClicked_event(state):
   github.screen_load()
 
 def btnC_wasClicked_event(state):
-  """Handle Button C click - switch to Actions page"""
-  global github
+  """Handle Button C click - switch to menu page"""
+  global menu
   playClickSound()
   wakeScreen()
-  github.screen_load()
+  menu.screen_load()
 
+
+def menu_settings_btn_clicked_event(event_struct):
+  """Handle settings button click in menu"""
+  global settings
+  playClickSound()
+  wakeScreen()
+  settings.screen_load()
+
+def menu_khadamaty_btn_clicked_event(event_struct):
+  """Handle khadamaty button click in menu"""
+  global khadamaty
+  playClickSound()
+  wakeScreen()
+  khadamaty.screen_load()
 
 def msgboxErrorOKBTN_event_handler(event_struct):
   """LVGL event handler wrapper for error OK button"""
@@ -540,9 +562,10 @@ def msgboxErrorOKBTN_event_handler(event_struct):
 
 def setup():
   """Initialize M5Stack, UI, and load configuration"""
-  global dashboard, github, github_list, text, msgboxError, msgboxErrorMSGLBL, msgboxErrorOKBTN
+  global dashboard, github, menu, settings, khadamaty, github_list, text, msgboxError, msgboxErrorMSGLBL, msgboxErrorOKBTN
   global loadingOverlay
-  global github_page_title, dashboard_page_title, label_wifi_status, label_mqtt_status, label_msg_count
+  global github_page_title, dashboard_page_title, menu_page_title, menu_settings_btn, menu_khadamaty_btn
+  global settings_page_title, khadamaty_page_title, label_wifi_status, label_mqtt_status, label_msg_count
   global label_ip_address, label_wifi_strength, label_battery
   global wlan_sta, mqtt_client, wifiCredsJSON, mqttCredsJSON, mqttMessages, pageIndex
   global last_activity_time
@@ -559,6 +582,9 @@ def setup():
   # Create pages
   dashboard = m5ui.M5Page(bg_c=0xffffff)
   github = m5ui.M5Page(bg_c=0xffffff)
+  menu = m5ui.M5Page(bg_c=0xffffff)
+  settings = m5ui.M5Page(bg_c=0xffffff)
+  khadamaty = m5ui.M5Page(bg_c=0xffffff)
   
   # Create UI elements on github page
   github_list = m5ui.M5List(x=2, y=22, w=315, h=215, parent=github)
@@ -586,8 +612,17 @@ def setup():
   label_ip_address = m5ui.M5Label("IP: ---.---.---.---", x=10, y=90, text_c=0x0000ff, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
   label_wifi_strength = m5ui.M5Label("Signal: --- dBm", x=10, y=110, text_c=0x008000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
   label_battery = m5ui.M5Label("Battery: ---%", x=10, y=130, text_c=0xff6600, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+    # Create UI elements on menu page
+  menu_page_title = m5ui.M5Label("Menu", x=140, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=menu)
+  menu_settings_btn = m5ui.M5Button(text="Settings", x=60, y=60, w=200, h=50, bg_c=0x0066cc, text_c=0xffffff, font=lv.font_montserrat_16, parent=menu)
+  menu_khadamaty_btn = m5ui.M5Button(text="Khadamaty", x=60, y=130, w=200, h=50, bg_c=0x0066cc, text_c=0xffffff, font=lv.font_montserrat_16, parent=menu)
   
-  # Create loading overlay using the LoadingOverlay class
+  # Create UI elements on settings page
+  settings_page_title = m5ui.M5Label("Settings", x=120, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=settings)
+  
+  # Create UI elements on khadamaty page
+  khadamaty_page_title = m5ui.M5Label("Khadamaty", x=110, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=khadamaty)
+    # Create loading overlay using the LoadingOverlay class
   loadingOverlay = LoadingOverlay(dashboard)
   
   # Test image loading
@@ -608,6 +643,8 @@ def setup():
 
   # Setup event handlers
   msgboxErrorOKBTN.add_event_cb(msgboxErrorOKBTN_event_handler, lv.EVENT.ALL, None)
+  menu_settings_btn.add_event_cb(menu_settings_btn_clicked_event, lv.EVENT.CLICKED, None)
+  menu_khadamaty_btn.add_event_cb(menu_khadamaty_btn_clicked_event, lv.EVENT.CLICKED, None)
   BtnA.setCallback(type=BtnA.CB_TYPE.WAS_CLICKED, cb=btnA_wasClicked_event)
   BtnB.setCallback(type=BtnB.CB_TYPE.WAS_CLICKED, cb=btnB_wasClicked_event)
   BtnC.setCallback(type=BtnC.CB_TYPE.WAS_CLICKED, cb=btnC_wasClicked_event)
