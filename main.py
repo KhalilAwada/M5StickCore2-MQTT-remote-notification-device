@@ -22,6 +22,9 @@ import time
 import network
 import json
 from umqtt.simple import MQTTClient
+# import urequests  # Not available on M5Stack - commented out
+import uhashlib
+import ubinascii
 
 
 class LoadingOverlay:
@@ -88,13 +91,13 @@ class LoadingOverlay:
 
 
 # UI Components (global - used across multiple functions)
-dashboard = None  # type: m5ui.M5Page
-github = None  # type: m5ui.M5Page
-menu = None  # type: m5ui.M5Page
-settings = None  # type: m5ui.M5Page
-khadamaty = None  # type: m5ui.M5Page
-github_list = None  # type: m5ui.M5List
-text = None  # type: m5ui.M5TextItem
+dashboard_page = None  # type: m5ui.M5Page
+github_page = None  # type: m5ui.M5Page
+menu_page = None  # type: m5ui.M5Page
+settings_page = None  # type: m5ui.M5Page
+khadamaty_page = None  # type: m5ui.M5Page
+github_page_list = None  # type: m5ui.M5List
+github_page_text = None  # type: m5ui.M5TextItem
 msgboxError = None  # type: m5ui.M5Msgbox
 msgboxErrorMSGLBL = None  # type: m5ui.M5TextItem
 msgboxErrorOKBTN = None  # type: m5ui.M5Button
@@ -103,17 +106,21 @@ github_page_title = None  # type: m5ui.M5Label
 github_page_icon = None  # type: m5ui.M5Image
 dashboard_page_title = None  # type: m5ui.M5Label
 menu_page_title = None  # type: m5ui.M5Label
-menu_settings_btn = None  # type: m5ui.M5Button
-menu_khadamaty_btn = None  # type: m5ui.M5Button
+menu_page_settings_btn = None  # type: m5ui.M5Button
+menu_page_khadamaty_btn = None  # type: m5ui.M5Button
 settings_page_title = None  # type: m5ui.M5Label
+settings_page_brightness_label = None  # type: m5ui.M5Label
+settings_page_brightness_slider = None  # type: lv.slider
+settings_page_volume_label = None  # type: m5ui.M5Label
+settings_page_volume_slider = None  # type: lv.slider
 khadamaty_page_title = None  # type: m5ui.M5Label
-label_wifi_status = None  # type: m5ui.M5Label
-label_mqtt_status = None  # type: m5ui.M5Label
-label_msg_count = None  # type: m5ui.M5Label
+dashboard_page_label_wifi_status = None  # type: m5ui.M5Label
+dashboard_page_label_mqtt_status = None  # type: m5ui.M5Label
+dashboard_page_label_msg_count = None  # type: m5ui.M5Label
 
-label_ip_address = None  # type: m5ui.M5Label
-label_wifi_strength = None  # type: m5ui.M5Label
-label_battery = None  # type: m5ui.M5Label
+dashboard_page_label_ip_address = None  # type: m5ui.M5Label
+dashboard_page_label_wifi_strength = None  # type: m5ui.M5Label
+dashboard_page_label_battery = None  # type: m5ui.M5Label
 
 # Network and Configuration (global - shared state)
 wlan_sta = None  # type: network.WLAN
@@ -122,13 +129,17 @@ wifiCredsJSON = None  # type: list
 mqttCredsJSON = None  # type: dict
 mqttMessages = None
 pageIndex = None  # type: int
+settingsJSON = None  # type: dict
 
 # Screen power management
-SCREEN_BRIGHTNESS_NORMAL = 200  # Full brightness
+SCREEN_BRIGHTNESS_NORMAL = 200  # Full brightness (will be overridden by settings)
 SCREEN_BRIGHTNESS_DIM = 30  # Dimmed brightness
 SCREEN_DIM_TIMEOUT = 30  # Dim after 30 seconds
 SCREEN_OFF_TIMEOUT = 120  # Turn off after 2 minutes
 last_activity_time = None  # type: float
+
+# Audio settings
+SPEAKER_VOLUME = 8  # Default volume (0-11, will be overridden by settings)
 
 
 def reportError(errorMessage):
@@ -198,13 +209,74 @@ def readSDFile(fileName, returnJSON):
   return returnValue
 
 
+def loadSettings():
+  """Load settings from SD card with defaults"""
+  global settingsJSON, SCREEN_BRIGHTNESS_NORMAL, SPEAKER_VOLUME
+  
+  settings = readSDFile('settings.json', True)
+  created_defaults = False
+  
+  if not settings:
+    # Default settings
+    settings = {
+      'max_brightness': 200,  # 0-255, minimum 127 (50%)
+      'volume': 8  # 0-11, 0 is mute
+    }
+    created_defaults = True
+    print('Using default settings (file not found)')
+  
+  # Ensure brightness is at least 50% (127)
+  if settings.get('max_brightness', 200) < 127:
+    settings['max_brightness'] = 127
+  
+  # Ensure volume is in valid range
+  if settings.get('volume', 8) < 0:
+    settings['volume'] = 0
+  elif settings.get('volume', 8) > 11:
+    settings['volume'] = 11
+  
+  settingsJSON = settings
+  SCREEN_BRIGHTNESS_NORMAL = settings['max_brightness']
+  SPEAKER_VOLUME = settings['volume']
+  
+  # Save default settings to SD card if we created them
+  if created_defaults:
+    saveSettings()
+    print('Created default settings.json')
+  
+  print(f'Settings loaded: brightness={SCREEN_BRIGHTNESS_NORMAL}, volume={SPEAKER_VOLUME}')
+  return settings
+
+
+def saveSettings():
+  """Save settings to SD card"""
+  global settingsJSON
+  
+  try:
+    if settingsJSON is None:
+      return
+    
+    # Convert to JSON string
+    json_str = json.dumps(settingsJSON)
+    
+    # Write to SD card
+    with open('/sd/settings.json', 'w') as f:
+      f.write(json_str)
+    
+    print(f'Settings saved: {settingsJSON}')
+    
+  except Exception as e:
+    print(f'ERROR saving settings to SD: {e}')
+    sys.print_exception(e)
+
+
 def connectWifi(credentials):
   """
   Connect to WiFi using credentials from config
   Args:
     credentials: List of dicts with 'ssid' and 'password' keys
   """
-  global wlan_sta, label_wifi_status
+  global wlan_sta
   
   # Build WiFi credentials map (local variable)
   wifi_map = {}
@@ -236,12 +308,12 @@ def connectWifi(credentials):
 
 
 def updateGitHubList():
-  """Update github_list with cached GitHub messages"""
-  global github_list, mqttMessages
+  """Update github_page_list with cached GitHub messages"""
+  global github_page_list, mqttMessages
   
   try:
     # Clear existing list items
-    github_list.clean()
+    github_page_list.clean()
     
     # Add cached messages to list (using simple m5ui method for better performance)
     if mqttMessages:
@@ -257,7 +329,7 @@ def updateGitHubList():
         bg_color = int(msg.get('bgColor', '0xffffff'), 16) if isinstance(msg.get('bgColor'), str) else msg.get('bgColor', 0xffffff)
         
         # Add text to list with colors using simple m5ui method (much faster)
-        label = github_list.add_text(display_text[:350], text_c=text_color, bg_c=bg_color)
+        label = github_page_list.add_text(display_text[:350], text_c=text_color, bg_c=bg_color)
         
         # Add 2px bottom margin to create spacing between items
         try:
@@ -265,7 +337,7 @@ def updateGitHubList():
         except:
           pass
         
-    print(f'Updated github_list with {len(mqttMessages) if mqttMessages else 0} messages')
+    print(f'Updated github_page_list with {len(mqttMessages) if mqttMessages else 0} messages')
     
   except Exception as e:
     print(f'ERROR in updateGitHubList: {e}')
@@ -296,7 +368,7 @@ def handleMQTTMessage(topic, message):
     topic: The MQTT topic as string
     message: The message payload as string
   """
-  global github_page_title, label_mqtt_status, mqttMessages
+  global github_page_title, dashboard_page_label_mqtt_status, mqttMessages
   
   print(f'Processing MQTT - Topic: {topic}, Message: {message}')
   
@@ -313,15 +385,15 @@ def handleMQTTMessage(topic, message):
         display_text = f"Topic: {topic}\n"
         for key, value in msg_data.items():
           display_text += f"{key}: {value}\n"
-        label_mqtt_status.set_text(display_text[:100])
+        dashboard_page_label_mqtt_status.set_text(display_text[:100])
       else:
-        label_mqtt_status.set_text(f"{topic}:\n{str(msg_data)[:80]}")
+        dashboard_page_label_mqtt_status.set_text(f"{topic}:\n{str(msg_data)[:80]}")
       
       # github_page_title.set_text(f"Latest: {topic}")
     
   except json.JSONDecodeError:
     # Message is not JSON, display as plain text
-    label_mqtt_status.set_text(f"{topic}:\n{message[:80]}")
+    dashboard_page_label_mqtt_status.set_text(f"{topic}:\n{message[:80]}")
     # github_page_title.set_text(f"Msg: {message[:20]}")
   except Exception as e:
     print(f'ERROR in handleMQTTMessage: {e}')
@@ -456,7 +528,12 @@ def connectMQTT():
 
 def playNotificationSound(msg_data):
   """Play notification sound based on message status and conclusion"""
+  global SPEAKER_VOLUME
+  
   try:
+    # Set speaker volume
+    M5.Speaker.setVolume(SPEAKER_VOLUME)
+    
     status = msg_data.get('status')
     conclusion = msg_data.get('conclusion')
     
@@ -503,10 +580,112 @@ def playNotificationSound(msg_data):
 
 def playClickSound():
   """Play button click sound"""
+  global SPEAKER_VOLUME
+  
   try:
+    M5.Speaker.setVolume(SPEAKER_VOLUME)
     M5.Speaker.tone(1000, 50)
   except Exception as e:
     print(f'ERROR playing click sound: {e}')
+
+
+# Commented out - urequests not available on M5Stack
+# def generateHmacToken(secret_key, message):
+#   """
+#   Generate HMAC-SHA256 token for API authentication
+#   
+#   Args:
+#     secret_key: Secret key as string
+#     message: Message to sign (typically timestamp or request data)
+#   
+#   Returns:
+#     Base64 encoded HMAC token as string
+#   """
+#   try:
+#     # Convert secret key and message to bytes if they're strings
+#     if isinstance(secret_key, str):
+#       secret_key = secret_key.encode('utf-8')
+#     if isinstance(message, str):
+#       message = message.encode('utf-8')
+#     
+#     # Create HMAC-SHA256 hash
+#     hmac = uhashlib.sha256(secret_key)
+#     hmac.update(message)
+#     
+#     # Get digest and encode as base64
+#     digest = hmac.digest()
+#     token = ubinascii.b2a_base64(digest).decode('utf-8').strip()
+#     
+#     return token
+#   except Exception as e:
+#     print(f'ERROR generating HMAC token: {e}')
+#     sys.print_exception(e)
+#     return None
+
+
+# Commented out - urequests not available on M5Stack
+# def apiRequestWithHmac(url, secret_key, method='GET', payload=None, headers=None, message=None):
+#   """
+#   Submit API request with HMAC bearer token authentication
+#   
+#   Args:
+#     url: API endpoint URL
+#     secret_key: Secret key for HMAC generation
+#     method: HTTP method (GET, POST, PUT, DELETE, etc.)
+#     payload: Request body data (dict or string)
+#     headers: Additional headers (dict)
+#     message: Custom message to sign (default: current timestamp)
+#   
+#   Returns:
+#     Response object from urequests, or None on error
+#   """
+#   try:
+#     # Generate message to sign (default to timestamp)
+#     if message is None:
+#       message = str(int(time.time()))
+#     
+#     # Generate HMAC token
+#     token = generateHmacToken(secret_key, message)
+#     if not token:
+#       print('ERROR: Failed to generate HMAC token')
+#       return None
+#     
+#     # Prepare headers
+#     request_headers = {
+#       'Authorization': f'Bearer {token}',
+#       'Content-Type': 'application/json'
+#     }
+#     
+#     # Add custom headers if provided
+#     if headers:
+#       request_headers.update(headers)
+#     
+#     # Convert payload to JSON if it's a dict
+#     if payload and isinstance(payload, dict):
+#       payload = json.dumps(payload)
+#     
+#     # Make the request
+#     print(f'Making {method} request to {url}')
+#     
+#     if method.upper() == 'GET':
+#       response = urequests.get(url, headers=request_headers)
+#     elif method.upper() == 'POST':
+#       response = urequests.post(url, headers=request_headers, data=payload)
+#     elif method.upper() == 'PUT':
+#       response = urequests.put(url, headers=request_headers, data=payload)
+#     elif method.upper() == 'DELETE':
+#       response = urequests.delete(url, headers=request_headers)
+#     else:
+#       print(f'ERROR: Unsupported HTTP method: {method}')
+#       return None
+#     
+#     print(f'Response status: {response.status_code}')
+#     return response
+#     
+#   except Exception as e:
+#     print(f'ERROR in apiRequestWithHmac: {e}')
+#     sys.print_exception(e)
+#     return None
 
 
 # Event Handlers
@@ -518,39 +697,39 @@ def msgboxErrorOKBTN_released_event(event_struct):
 
 def btnA_wasClicked_event(state):
   """Handle Button A click - switch to dashboard page"""
-  global dashboard
+  global dashboard_page
   playClickSound()
   wakeScreen()
-  dashboard.screen_load()
+  dashboard_page.screen_load()
 
 def btnB_wasClicked_event(state):
   """Handle Button B click - switch to github page"""
-  global github
+  global github_page
   playClickSound()
   wakeScreen()
-  github.screen_load()
+  github_page.screen_load()
 
 def btnC_wasClicked_event(state):
   """Handle Button C click - switch to menu page"""
-  global menu
+  global menu_page
   playClickSound()
   wakeScreen()
-  menu.screen_load()
+  menu_page.screen_load()
 
 
 def menu_settings_btn_clicked_event(event_struct):
   """Handle settings button click in menu"""
-  global settings
+  global settings_page
   playClickSound()
   wakeScreen()
-  settings.screen_load()
+  settings_page.screen_load()
 
 def menu_khadamaty_btn_clicked_event(event_struct):
   """Handle khadamaty button click in menu"""
-  global khadamaty
+  global khadamaty_page
   playClickSound()
   wakeScreen()
-  khadamaty.screen_load()
+  khadamaty_page.screen_load()
 
 def msgboxErrorOKBTN_event_handler(event_struct):
   """LVGL event handler wrapper for error OK button"""
@@ -560,15 +739,73 @@ def msgboxErrorOKBTN_event_handler(event_struct):
     msgboxErrorOKBTN_released_event(event_struct)
   return
 
+def settings_brightness_slider_event(event_struct):
+  """Handle brightness slider value change"""
+  global settingsJSON, SCREEN_BRIGHTNESS_NORMAL, settings_page_brightness_slider, settings_page_brightness_label
+  
+  event = event_struct.code
+  if event == lv.EVENT.VALUE_CHANGED:
+    try:
+      value = settings_page_brightness_slider.get_value()
+      # Ensure minimum 50% (127)
+      if value < 127:
+        value = 127
+        settings_page_brightness_slider.set_value(value, 0)
+      
+      settingsJSON['max_brightness'] = value
+      SCREEN_BRIGHTNESS_NORMAL = value
+      settings_page_brightness_label.set_text(f'Max Brightness: {int(value/255*100)}%')
+      
+      # Apply immediately
+      M5.Display.setBrightness(value)
+      
+      # Save to SD card
+      saveSettings()
+      
+      print(f'Brightness updated to {value}')
+    except Exception as e:
+      print(f'ERROR in brightness slider: {e}')
+      sys.print_exception(e)
+
+def settings_volume_slider_event(event_struct):
+  """Handle volume slider value change"""
+  global settingsJSON, SPEAKER_VOLUME, settings_page_volume_slider, settings_page_volume_label
+  
+  event = event_struct.code
+  if event == lv.EVENT.VALUE_CHANGED:
+    try:
+      value = settings_page_volume_slider.get_value()
+      settingsJSON['volume'] = value
+      SPEAKER_VOLUME = value
+      
+      # Update label
+      if value == 0:
+        settings_page_volume_label.set_text('Volume: Muted')
+      else:
+        settings_page_volume_label.set_text(f'Volume: {int(value/11*100)}%')
+      
+      # Play test sound
+      M5.Speaker.setVolume(value)
+      M5.Speaker.tone(1000, 100)
+      
+      # Save to SD card
+      saveSettings()
+      
+      print(f'Volume updated to {value}')
+    except Exception as e:
+      print(f'ERROR in volume slider: {e}')
+      sys.print_exception(e)
+
 def setup():
   """Initialize M5Stack, UI, and load configuration"""
-  global dashboard, github, menu, settings, khadamaty, github_list, text, msgboxError, msgboxErrorMSGLBL, msgboxErrorOKBTN
+  global dashboard_page, github_page, menu_page, settings_page, khadamaty_page, github_page_list, github_page_text, msgboxError, msgboxErrorMSGLBL, msgboxErrorOKBTN
   global loadingOverlay
-  global github_page_title, dashboard_page_title, menu_page_title, menu_settings_btn, menu_khadamaty_btn
-  global settings_page_title, khadamaty_page_title, label_wifi_status, label_mqtt_status, label_msg_count
-  global label_ip_address, label_wifi_strength, label_battery
-  global wlan_sta, mqtt_client, wifiCredsJSON, mqttCredsJSON, mqttMessages, pageIndex
-  global last_activity_time
+  global github_page_title, dashboard_page_title, menu_page_title, menu_page_settings_btn, menu_page_khadamaty_btn
+  global settings_page_title, settings_page_brightness_label, settings_page_brightness_slider, settings_page_volume_label, settings_page_volume_slider
+  global khadamaty_page_title, dashboard_page_label_wifi_status, dashboard_page_label_mqtt_status, dashboard_page_label_msg_count
+  global dashboard_page_label_ip_address, dashboard_page_label_wifi_strength, dashboard_page_label_battery
+  global wlan_sta, mqtt_client, wifiCredsJSON, mqttCredsJSON, mqttMessages, settingsJSON, pageIndex
+  global last_activity_time, SCREEN_BRIGHTNESS_NORMAL, SPEAKER_VOLUME
 
   # Initialize M5Stack and UI
   M5.begin()
@@ -580,50 +817,68 @@ def setup():
   last_activity_time = time.time()
   
   # Create pages
-  dashboard = m5ui.M5Page(bg_c=0xffffff)
-  github = m5ui.M5Page(bg_c=0xffffff)
-  menu = m5ui.M5Page(bg_c=0xffffff)
-  settings = m5ui.M5Page(bg_c=0xffffff)
-  khadamaty = m5ui.M5Page(bg_c=0xffffff)
+  dashboard_page = m5ui.M5Page(bg_c=0xffffff)
+  github_page = m5ui.M5Page(bg_c=0xffffff)
+  menu_page = m5ui.M5Page(bg_c=0xffffff)
+  settings_page = m5ui.M5Page(bg_c=0xffffff)
+  khadamaty_page = m5ui.M5Page(bg_c=0xffffff)
   
-  # Create UI elements on github page
-  github_list = m5ui.M5List(x=2, y=22, w=315, h=215, parent=github)
+  # Create UI elements on github_page page
+  github_page_list = m5ui.M5List(x=2, y=22, w=315, h=215, parent=github_page)
   # Disable horizontal scrolling on the underlying LVGL object
   try:
-    github_list._list.set_scroll_dir(lv.DIR.VER)  # Only vertical scroll
+    github_page_list._list.set_scroll_dir(lv.DIR.VER)  # Only vertical scroll
 
     # Disable scroll elasticity and momentum for better performance
-    github_list._list.remove_flag(lv.obj.FLAG.SCROLL_ELASTIC)
-    github_list._list.remove_flag(lv.obj.FLAG.SCROLL_MOMENTUM)
+    github_page_list._list.remove_flag(lv.obj.FLAG.SCROLL_ELASTIC)
+    github_page_list._list.remove_flag(lv.obj.FLAG.SCROLL_MOMENTUM)
     
     # Add 2px padding between list items
-    github_list._list.set_style_pad_row(2, 0)
+    github_page_list._list.set_style_pad_row(2, 0)
   except:
     pass  # If method not available, skip
-  text = github_list.add_text("text")
-  github_page_title = m5ui.M5Label("Github", x=20, y=1, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=github)
-  github_page_icon = m5ui.M5Image("/flash/res/img/github.png", x=1, y=1, rotation=0, scale_x=1, scale_y=1, parent=github)
+  github_page_text = github_page_list.add_text("text")
+  github_page_title = m5ui.M5Label("Github", x=20, y=1, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=github_page)
+  github_page_icon = m5ui.M5Image("/flash/res/img/github.png", x=1, y=1, rotation=0, scale_x=1, scale_y=1, parent=github_page)
 
   # Create UI elements on dashboard page
-  dashboard_page_title = m5ui.M5Label("Dashboard", x=0, y=0, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
-  label_wifi_status = m5ui.M5Label("WiFi: Initializing...", x=10, y=30, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
-  label_mqtt_status = m5ui.M5Label("MQTT: Initializing...", x=10, y=50, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
-  label_msg_count = m5ui.M5Label("Messages: 0", x=10, y=70, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
-  label_ip_address = m5ui.M5Label("IP: ---.---.---.---", x=10, y=90, text_c=0x0000ff, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
-  label_wifi_strength = m5ui.M5Label("Signal: --- dBm", x=10, y=110, text_c=0x008000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
-  label_battery = m5ui.M5Label("Battery: ---%", x=10, y=130, text_c=0xff6600, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard)
+  dashboard_page_title = m5ui.M5Label("Dashboard", x=0, y=0, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard_page)
+  dashboard_page_label_wifi_status = m5ui.M5Label("WiFi: Initializing...", x=10, y=30, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard_page)
+  dashboard_page_label_mqtt_status = m5ui.M5Label("MQTT: Initializing...", x=10, y=50, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard_page)
+  dashboard_page_label_msg_count = m5ui.M5Label("Messages: 0", x=10, y=70, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard_page)
+  dashboard_page_label_ip_address = m5ui.M5Label("IP: ---.---.---.---", x=10, y=90, text_c=0x0000ff, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard_page)
+  dashboard_page_label_wifi_strength = m5ui.M5Label("Signal: --- dBm", x=10, y=110, text_c=0x008000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard_page)
+  dashboard_page_label_battery = m5ui.M5Label("Battery: ---%", x=10, y=130, text_c=0xff6600, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=dashboard_page)
     # Create UI elements on menu page
-  menu_page_title = m5ui.M5Label("Menu", x=140, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=menu)
-  menu_settings_btn = m5ui.M5Button(text="Settings", x=60, y=60, w=200, h=50, bg_c=0x0066cc, text_c=0xffffff, font=lv.font_montserrat_16, parent=menu)
-  menu_khadamaty_btn = m5ui.M5Button(text="Khadamaty", x=60, y=130, w=200, h=50, bg_c=0x0066cc, text_c=0xffffff, font=lv.font_montserrat_16, parent=menu)
+  menu_page_title = m5ui.M5Label("Menu", x=140, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=menu_page)
+  menu_page_settings_btn = m5ui.M5Button(text="Settings", x=60, y=60, w=200, h=50, bg_c=0x0066cc, text_c=0xffffff, font=lv.font_montserrat_16, parent=menu_page)
+  menu_page_khadamaty_btn = m5ui.M5Button(text="Khadamaty", x=60, y=130, w=200, h=50, bg_c=0x0066cc, text_c=0xffffff, font=lv.font_montserrat_16, parent=menu_page)
   
   # Create UI elements on settings page
-  settings_page_title = m5ui.M5Label("Settings", x=120, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=settings)
+  settings_page_title = m5ui.M5Label("Settings", x=120, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=settings_page)
+  
+  # Brightness slider
+  settings_page_brightness_label = m5ui.M5Label("Max Brightness: 78%", x=20, y=50, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=settings_page)
+  settings_page_brightness_slider = lv.slider(settings_page)
+  settings_page_brightness_slider.set_pos(20, 75)
+  settings_page_brightness_slider.set_size(280, 10)
+  settings_page_brightness_slider.set_range(127, 255)  # 50% to 100%
+  settings_page_brightness_slider.set_value(200, 0)
+  settings_page_brightness_slider.add_event_cb(settings_brightness_slider_event, lv.EVENT.ALL, None)
+  
+  # Volume slider
+  settings_page_volume_label = m5ui.M5Label("Volume: 73%", x=20, y=110, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=settings_page)
+  settings_page_volume_slider = lv.slider(settings_page)
+  settings_page_volume_slider.set_pos(20, 135)
+  settings_page_volume_slider.set_size(280, 10)
+  settings_page_volume_slider.set_range(0, 11)  # 0 (mute) to 11 (max)
+  settings_page_volume_slider.set_value(8, 0)
+  settings_page_volume_slider.add_event_cb(settings_volume_slider_event, lv.EVENT.ALL, None)
   
   # Create UI elements on khadamaty page
-  khadamaty_page_title = m5ui.M5Label("Khadamaty", x=110, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=khadamaty)
+  khadamaty_page_title = m5ui.M5Label("Khadamaty", x=110, y=10, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_16, parent=khadamaty_page)
     # Create loading overlay using the LoadingOverlay class
-  loadingOverlay = LoadingOverlay(dashboard)
+  loadingOverlay = LoadingOverlay(dashboard_page)
   
   # Test image loading
   try:
@@ -643,8 +898,8 @@ def setup():
 
   # Setup event handlers
   msgboxErrorOKBTN.add_event_cb(msgboxErrorOKBTN_event_handler, lv.EVENT.ALL, None)
-  menu_settings_btn.add_event_cb(menu_settings_btn_clicked_event, lv.EVENT.CLICKED, None)
-  menu_khadamaty_btn.add_event_cb(menu_khadamaty_btn_clicked_event, lv.EVENT.CLICKED, None)
+  menu_page_settings_btn.add_event_cb(menu_settings_btn_clicked_event, lv.EVENT.CLICKED, None)
+  menu_page_khadamaty_btn.add_event_cb(menu_khadamaty_btn_clicked_event, lv.EVENT.CLICKED, None)
   BtnA.setCallback(type=BtnA.CB_TYPE.WAS_CLICKED, cb=btnA_wasClicked_event)
   BtnB.setCallback(type=BtnB.CB_TYPE.WAS_CLICKED, cb=btnB_wasClicked_event)
   BtnC.setCallback(type=BtnC.CB_TYPE.WAS_CLICKED, cb=btnC_wasClicked_event)
@@ -664,15 +919,28 @@ def setup():
   # Load configuration files from SD card
   wifiCredsJSON = readSDFile('wifi.json', True)
   mqttCredsJSON = readSDFile('mqtt.json', True)
+  settingsJSON = loadSettings()
+  
+  # Update sliders with loaded settings
+  if settingsJSON:
+    settings_page_brightness_slider.set_value(settingsJSON.get('max_brightness', 200), 0)
+    settings_page_brightness_label.set_text(f"Max Brightness: {int(settingsJSON.get('max_brightness', 200)/255*100)}%")
+    
+    volume = settingsJSON.get('volume', 8)
+    settings_page_volume_slider.set_value(volume, 0)
+    if volume == 0:
+      settings_page_volume_label.set_text('Volume: Muted')
+    else:
+      settings_page_volume_label.set_text(f'Volume: {int(volume/11*100)}%')
   
   # Show dashboard
-  dashboard.screen_load()
+  dashboard_page.screen_load()
   
   # Display loaded config (for debugging)
   if wifiCredsJSON:
-    label_wifi_status.set_text('WiFi: Config loaded')
+    dashboard_page_label_wifi_status.set_text('WiFi: Config loaded')
   else:
-    label_wifi_status.set_text('WiFi: No config found')
+    dashboard_page_label_wifi_status.set_text('WiFi: No config found')
   
   # Load MQTT messages
   mqttMessages = loadMQTTMessages()
@@ -697,8 +965,8 @@ def setup():
 
 def loop():
   """Main application loop - runs continuously"""
-  global wlan_sta, mqtt_client, label_wifi_status, label_mqtt_status, label_msg_count
-  global label_ip_address, label_wifi_strength, label_battery, wifiCredsJSON, mqttCredsJSON
+  global wlan_sta, mqtt_client, dashboard_page_label_wifi_status, dashboard_page_label_mqtt_status, dashboard_page_label_msg_count
+  global dashboard_page_label_ip_address, dashboard_page_label_wifi_strength, dashboard_page_label_battery, wifiCredsJSON, mqttCredsJSON
   global last_activity_time
   
   M5.update()
@@ -752,9 +1020,9 @@ def loop():
     wifi_status = 'Connected' if wlan_sta.isconnected() else 'Disconnected'
     mqtt_status = 'Connected' if mqtt_client else 'Disconnected'
     msg_count = len(mqttMessages) if mqttMessages else 0
-    label_wifi_status.set_text(f'WiFi: {wifi_status}')
-    label_mqtt_status.set_text(f'MQTT: {mqtt_status}')
-    label_msg_count.set_text(f'Messages: {msg_count}')
+    dashboard_page_label_wifi_status.set_text(f'WiFi: {wifi_status}')
+    dashboard_page_label_mqtt_status.set_text(f'MQTT: {mqtt_status}')
+    dashboard_page_label_msg_count.set_text(f'Messages: {msg_count}')
     
     # Update battery level
     try:
@@ -772,17 +1040,17 @@ def loop():
       else:
         battery_color = 0xff0000  # Red - Critical
       
-      label_battery.set_style_text_color(lv.color_hex(battery_color), 0)
-      label_battery.set_text(f'Battery: {battery_level}%{charging_icon}')
+      dashboard_page_label_battery.set_style_text_color(lv.color_hex(battery_color), 0)
+      dashboard_page_label_battery.set_text(f'Battery: {battery_level}%{charging_icon}')
     except Exception as e:
-      label_battery.set_text('Battery: N/A')
+      dashboard_page_label_battery.set_text('Battery: N/A')
       print(f'Error reading battery: {e}')
     
     # Update IP address
     if wlan_sta.isconnected():
       ip_info = wlan_sta.ifconfig()
       ip_address = ip_info[0]
-      label_ip_address.set_text(f'IP: {ip_address}')
+      dashboard_page_label_ip_address.set_text(f'IP: {ip_address}')
       
       # Update WiFi signal strength
       try:
@@ -801,14 +1069,14 @@ def loop():
           signal_color = 0xff0000  # Red - Weak
           signal_text = 'Weak'
         
-        label_wifi_strength.set_style_text_color(lv.color_hex(signal_color), 0)
-        label_wifi_strength.set_text(f'Signal: {rssi} dBm ({signal_text})')
+        dashboard_page_label_wifi_strength.set_style_text_color(lv.color_hex(signal_color), 0)
+        dashboard_page_label_wifi_strength.set_text(f'Signal: {rssi} dBm ({signal_text})')
       except Exception as e:
-        label_wifi_strength.set_text(f'Signal: N/A')
+        dashboard_page_label_wifi_strength.set_text(f'Signal: N/A')
         print(f'Error reading WiFi signal: {e}')
     else:
-      label_ip_address.set_text('IP: Not connected')
-      label_wifi_strength.set_text('Signal: Not connected')
+      dashboard_page_label_ip_address.set_text('IP: Not connected')
+      dashboard_page_label_wifi_strength.set_text('Signal: Not connected')
   
   # Check WiFi and MQTT connection every 30 seconds for reconnection
   if checkTime(30):
