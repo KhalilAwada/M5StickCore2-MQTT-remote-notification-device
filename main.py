@@ -528,48 +528,47 @@ def connectMQTT():
 
 def playNotificationSound(msg_data):
   """Play notification sound based on message status and conclusion"""
-  global SPEAKER_VOLUME
   
   try:
-    # Set speaker volume
-    M5.Speaker.setVolume(SPEAKER_VOLUME)
+    # Set speaker to maximum volume for notifications
+    M5.Speaker.setVolume(11)
     
     status = msg_data.get('status')
     conclusion = msg_data.get('conclusion')
     
     if status == 'completed' and conclusion == 'success':
-      # Happy sound - cheerful ascending melody
-      M5.Speaker.tone(523, 80)  # C
-      time.sleep(0.08)
-      M5.Speaker.tone(659, 80)  # E
-      time.sleep(0.08)
-      M5.Speaker.tone(784, 80)  # G
-      time.sleep(0.08)
-      M5.Speaker.tone(1047, 150)  # C (high)
-      time.sleep(0.15)
-      M5.Speaker.tone(1047, 80)  # C (high) repeat
-      time.sleep(0.08)
-      M5.Speaker.tone(784, 120)  # G
+      # Happy sound - loud cheerful ascending melody with longer tones
+      M5.Speaker.tone(440, 300)  # A
+      time.sleep(0.3)
+      M5.Speaker.tone(523, 300)  # C
+      time.sleep(0.3)
+      M5.Speaker.tone(659, 300)  # E
+      time.sleep(0.3)
+      M5.Speaker.tone(784, 500)  # G (high)
+      time.sleep(0.5)
+      M5.Speaker.tone(784, 300)  # G (high) repeat
+      time.sleep(0.3)
+      M5.Speaker.tone(659, 400)  # E
     elif status == 'completed' and conclusion != 'success':
-      # Sad sound - descending tones with longer duration
-      M5.Speaker.tone(659, 150)  # E
-      time.sleep(0.15)
-      M5.Speaker.tone(587, 150)  # D
-      time.sleep(0.15)
-      M5.Speaker.tone(523, 150)  # C
-      time.sleep(0.15)
-      M5.Speaker.tone(392, 250)  # G (low)
-      time.sleep(0.25)
-      M5.Speaker.tone(330, 300)  # E (low)
+      # Sad sound - loud descending tones with much longer duration
+      M5.Speaker.tone(523, 400)  # C
+      time.sleep(0.4)
+      M5.Speaker.tone(440, 400)  # A
+      time.sleep(0.4)
+      M5.Speaker.tone(392, 400)  # G
+      time.sleep(0.4)
+      M5.Speaker.tone(330, 500)  # E (low)
+      time.sleep(0.5)
+      M5.Speaker.tone(262, 600)  # C (low)
     else:
-      # Regular notification - distinct pattern
-      M5.Speaker.tone(880, 100)  # A
-      time.sleep(0.1)
-      M5.Speaker.tone(1047, 100)  # C
-      time.sleep(0.1)
-      M5.Speaker.tone(880, 100)  # A
-      time.sleep(0.2)
-      M5.Speaker.tone(1047, 150)  # C
+      # Regular notification - loud distinct pattern with longer tones
+      M5.Speaker.tone(659, 300)  # E
+      time.sleep(0.3)
+      M5.Speaker.tone(784, 300)  # G
+      time.sleep(0.3)
+      M5.Speaker.tone(659, 300)  # E
+      time.sleep(0.4)
+      M5.Speaker.tone(784, 500)  # G
     
     print(f'Played notification sound: status={status}, conclusion={conclusion}')
     
@@ -811,6 +810,14 @@ def setup():
   M5.begin()
   M5.Widgets.setRotation(1)
   m5ui.init()
+  
+  # Initialize speaker
+  try:
+    M5.Speaker.begin()
+    M5.Speaker.setVolume(11)
+    print('Speaker initialized')
+  except Exception as e:
+    print(f'Speaker initialization: {e}')
   
   # Set initial brightness and activity time
   M5.Display.setBrightness(SCREEN_BRIGHTNESS_NORMAL)
