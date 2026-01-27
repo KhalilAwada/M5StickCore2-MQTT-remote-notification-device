@@ -537,38 +537,38 @@ def playNotificationSound(msg_data):
     conclusion = msg_data.get('conclusion')
     
     if status == 'completed' and conclusion == 'success':
-      # Happy sound - loud cheerful ascending melody with longer tones
-      M5.Speaker.tone(440, 300)  # A
-      time.sleep(0.3)
-      M5.Speaker.tone(523, 300)  # C
-      time.sleep(0.3)
-      M5.Speaker.tone(659, 300)  # E
-      time.sleep(0.3)
-      M5.Speaker.tone(784, 500)  # G (high)
-      time.sleep(0.5)
-      M5.Speaker.tone(784, 300)  # G (high) repeat
-      time.sleep(0.3)
-      M5.Speaker.tone(659, 400)  # E
+      # Happy sound - cheerful ascending melody
+      M5.Speaker.tone(523, 100)  # C
+      time.sleep(0.1)
+      M5.Speaker.tone(659, 100)  # E
+      time.sleep(0.1)
+      M5.Speaker.tone(784, 100)  # G
+      time.sleep(0.1)
+      M5.Speaker.tone(1047, 150)  # C (high)
+      time.sleep(0.15)
+      M5.Speaker.tone(1047, 100)  # C (high) repeat
+      time.sleep(0.1)
+      M5.Speaker.tone(784, 120)  # G
     elif status == 'completed' and conclusion != 'success':
-      # Sad sound - loud descending tones with much longer duration
-      M5.Speaker.tone(523, 400)  # C
-      time.sleep(0.4)
-      M5.Speaker.tone(440, 400)  # A
-      time.sleep(0.4)
-      M5.Speaker.tone(392, 400)  # G
-      time.sleep(0.4)
-      M5.Speaker.tone(330, 500)  # E (low)
-      time.sleep(0.5)
-      M5.Speaker.tone(262, 600)  # C (low)
+      # Sad sound - descending tones
+      M5.Speaker.tone(659, 120)  # E
+      time.sleep(0.12)
+      M5.Speaker.tone(523, 120)  # C
+      time.sleep(0.12)
+      M5.Speaker.tone(440, 120)  # A
+      time.sleep(0.12)
+      M5.Speaker.tone(392, 150)  # G
+      time.sleep(0.15)
+      M5.Speaker.tone(330, 180)  # E (low)
     else:
-      # Regular notification - loud distinct pattern with longer tones
-      M5.Speaker.tone(659, 300)  # E
-      time.sleep(0.3)
-      M5.Speaker.tone(784, 300)  # G
-      time.sleep(0.3)
-      M5.Speaker.tone(659, 300)  # E
-      time.sleep(0.4)
-      M5.Speaker.tone(784, 500)  # G
+      # Regular notification - distinct pattern
+      M5.Speaker.tone(784, 80)  # G
+      time.sleep(0.08)
+      M5.Speaker.tone(1047, 80)  # C (high)
+      time.sleep(0.08)
+      M5.Speaker.tone(784, 80)  # G
+      time.sleep(0.1)
+      M5.Speaker.tone(1047, 150)  # C (high)
     
     print(f'Played notification sound: status={status}, conclusion={conclusion}')
     
