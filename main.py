@@ -139,7 +139,7 @@ SCREEN_OFF_TIMEOUT = 120  # Turn off after 2 minutes
 last_activity_time = None  # type: float
 
 # Audio settings
-SPEAKER_VOLUME = 8  # Default volume (0-11, will be overridden by settings)
+SPEAKER_VOLUME = 200  # Default volume (0-255, will be overridden by settings) - 255 is max
 
 
 def reportError(errorMessage):
@@ -530,8 +530,8 @@ def playNotificationSound(msg_data):
   """Play notification sound based on message status and conclusion"""
   
   try:
-    # Set speaker to maximum volume for notifications
-    M5.Speaker.setVolume(11)
+    # Use user's volume setting for notifications
+    M5.Speaker.setVolume(SPEAKER_VOLUME)
     
     status = msg_data.get('status')
     conclusion = msg_data.get('conclusion')
@@ -781,7 +781,7 @@ def settings_volume_slider_event(event_struct):
       if value == 0:
         settings_page_volume_label.set_text('Volume: Muted')
       else:
-        settings_page_volume_label.set_text(f'Volume: {int(value/11*100)}%')
+        settings_page_volume_label.set_text(f'Volume: {int(value/255*100)}%')
       
       # Play test sound
       M5.Speaker.setVolume(value)
@@ -814,7 +814,7 @@ def setup():
   # Initialize speaker
   try:
     M5.Speaker.begin()
-    M5.Speaker.setVolume(11)
+    M5.Speaker.setVolume(255)  # Initialize at maximum volume
     print('Speaker initialized')
   except Exception as e:
     print(f'Speaker initialization: {e}')
@@ -874,12 +874,12 @@ def setup():
   settings_page_brightness_slider.add_event_cb(settings_brightness_slider_event, lv.EVENT.ALL, None)
   
   # Volume slider
-  settings_page_volume_label = m5ui.M5Label("Volume: 73%", x=20, y=110, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=settings_page)
+  settings_page_volume_label = m5ui.M5Label("Volume: 78%", x=20, y=110, text_c=0x000000, bg_c=0xffffff, bg_opa=0, font=lv.font_montserrat_14, parent=settings_page)
   settings_page_volume_slider = lv.slider(settings_page)
   settings_page_volume_slider.set_pos(20, 135)
   settings_page_volume_slider.set_size(280, 10)
-  settings_page_volume_slider.set_range(0, 11)  # 0 (mute) to 11 (max)
-  settings_page_volume_slider.set_value(8, 0)
+  settings_page_volume_slider.set_range(0, 255)  # 0 (mute) to 255 (max) - M5.Speaker.setVolume() range
+  settings_page_volume_slider.set_value(200, 0)
   settings_page_volume_slider.add_event_cb(settings_volume_slider_event, lv.EVENT.ALL, None)
   
   # Create UI elements on khadamaty page
