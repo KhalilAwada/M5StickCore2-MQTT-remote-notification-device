@@ -22,7 +22,7 @@ import time
 import network
 import json
 from umqtt.simple import MQTTClient
-# import urequests  # Not available on M5Stack - commented out
+import requests2
 import uhashlib
 import ubinascii
 
@@ -588,103 +588,101 @@ def playClickSound():
     print(f'ERROR playing click sound: {e}')
 
 
-# Commented out - urequests not available on M5Stack
-# def generateHmacToken(secret_key, message):
-#   """
-#   Generate HMAC-SHA256 token for API authentication
-#   
-#   Args:
-#     secret_key: Secret key as string
-#     message: Message to sign (typically timestamp or request data)
-#   
-#   Returns:
-#     Base64 encoded HMAC token as string
-#   """
-#   try:
-#     # Convert secret key and message to bytes if they're strings
-#     if isinstance(secret_key, str):
-#       secret_key = secret_key.encode('utf-8')
-#     if isinstance(message, str):
-#       message = message.encode('utf-8')
-#     
-#     # Create HMAC-SHA256 hash
-#     hmac = uhashlib.sha256(secret_key)
-#     hmac.update(message)
-#     
-#     # Get digest and encode as base64
-#     digest = hmac.digest()
-#     token = ubinascii.b2a_base64(digest).decode('utf-8').strip()
-#     
-#     return token
-#   except Exception as e:
-#     print(f'ERROR generating HMAC token: {e}')
-#     sys.print_exception(e)
-#     return None
+def generateHmacToken(secret_key, message):
+  """
+  Generate HMAC-SHA256 token for API authentication
+  
+  Args:
+    secret_key: Secret key as string
+    message: Message to sign (typically timestamp or request data)
+  
+  Returns:
+    Base64 encoded HMAC token as string
+  """
+  try:
+    # Convert secret key and message to bytes if they're strings
+    if isinstance(secret_key, str):
+      secret_key = secret_key.encode('utf-8')
+    if isinstance(message, str):
+      message = message.encode('utf-8')
+    
+    # Create HMAC-SHA256 hash
+    hmac = uhashlib.sha256(secret_key)
+    hmac.update(message)
+    
+    # Get digest and encode as base64
+    digest = hmac.digest()
+    token = ubinascii.b2a_base64(digest).decode('utf-8').strip()
+    
+    return token
+  except Exception as e:
+    print(f'ERROR generating HMAC token: {e}')
+    sys.print_exception(e)
+    return None
 
 
-# Commented out - urequests not available on M5Stack
-# def apiRequestWithHmac(url, secret_key, method='GET', payload=None, headers=None, message=None):
-#   """
-#   Submit API request with HMAC bearer token authentication
-#   
-#   Args:
-#     url: API endpoint URL
-#     secret_key: Secret key for HMAC generation
-#     method: HTTP method (GET, POST, PUT, DELETE, etc.)
-#     payload: Request body data (dict or string)
-#     headers: Additional headers (dict)
-#     message: Custom message to sign (default: current timestamp)
-#   
-#   Returns:
-#     Response object from urequests, or None on error
-#   """
-#   try:
-#     # Generate message to sign (default to timestamp)
-#     if message is None:
-#       message = str(int(time.time()))
-#     
-#     # Generate HMAC token
-#     token = generateHmacToken(secret_key, message)
-#     if not token:
-#       print('ERROR: Failed to generate HMAC token')
-#       return None
-#     
-#     # Prepare headers
-#     request_headers = {
-#       'Authorization': f'Bearer {token}',
-#       'Content-Type': 'application/json'
-#     }
-#     
-#     # Add custom headers if provided
-#     if headers:
-#       request_headers.update(headers)
-#     
-#     # Convert payload to JSON if it's a dict
-#     if payload and isinstance(payload, dict):
-#       payload = json.dumps(payload)
-#     
-#     # Make the request
-#     print(f'Making {method} request to {url}')
-#     
-#     if method.upper() == 'GET':
-#       response = urequests.get(url, headers=request_headers)
-#     elif method.upper() == 'POST':
-#       response = urequests.post(url, headers=request_headers, data=payload)
-#     elif method.upper() == 'PUT':
-#       response = urequests.put(url, headers=request_headers, data=payload)
-#     elif method.upper() == 'DELETE':
-#       response = urequests.delete(url, headers=request_headers)
-#     else:
-#       print(f'ERROR: Unsupported HTTP method: {method}')
-#       return None
-#     
-#     print(f'Response status: {response.status_code}')
-#     return response
-#     
-#   except Exception as e:
-#     print(f'ERROR in apiRequestWithHmac: {e}')
-#     sys.print_exception(e)
-#     return None
+def apiRequestWithHmac(url, secret_key, method='GET', payload=None, headers=None, message=None):
+  """
+  Submit API request with HMAC bearer token authentication
+  
+  Args:
+    url: API endpoint URL
+    secret_key: Secret key for HMAC generation
+    method: HTTP method (GET, POST, PUT, DELETE, etc.)
+    payload: Request body data (dict or string)
+    headers: Additional headers (dict)
+    message: Custom message to sign (default: current timestamp)
+  
+  Returns:
+    Response object from requests2, or None on error
+  """
+  try:
+    # Generate message to sign (default to timestamp)
+    if message is None:
+      message = str(int(time.time()))
+    
+    # Generate HMAC token
+    token = generateHmacToken(secret_key, message)
+    if not token:
+      print('ERROR: Failed to generate HMAC token')
+      return None
+    
+    # Prepare headers
+    request_headers = {
+      'Authorization': f'Bearer {token}',
+      'Content-Type': 'application/json'
+    }
+    
+    # Add custom headers if provided
+    if headers:
+      request_headers.update(headers)
+    
+    # Convert payload to JSON if it's a dict
+    if payload and isinstance(payload, dict):
+      payload = json.dumps(payload)
+    
+    # Make the request
+    print(f'Making {method} request to {url}')
+    
+    if method.upper() == 'GET':
+      response = requests2.get(url, headers=request_headers)
+    elif method.upper() == 'POST':
+      response = requests2.post(url, headers=request_headers, data=payload)
+    elif method.upper() == 'PUT':
+      response = requests2.put(url, headers=request_headers, data=payload)
+    elif method.upper() == 'DELETE':
+      response = requests2.delete(url, headers=request_headers)
+    else:
+      print(f'ERROR: Unsupported HTTP method: {method}')
+      return None
+    
+    print(f'Response status: {response.status_code}')
+    return response
+    
+  except Exception as e:
+    print(f'ERROR in apiRequestWithHmac: {e}')
+    sys.print_exception(e)
+    return None
 
 
 # Event Handlers
