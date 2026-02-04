@@ -220,7 +220,7 @@ def loadSettings():
     # Default settings
     settings = {
       'max_brightness': 200,  # 0-255, minimum 127 (50%)
-      'volume': 8  # 0-11, 0 is mute
+      'volume': 80  # 0-100, 0 is mute (scaled to 0-255 for speaker)
     }
     created_defaults = True
     print('Using default settings (file not found)')
@@ -229,11 +229,11 @@ def loadSettings():
   if settings.get('max_brightness', 200) < 127:
     settings['max_brightness'] = 127
   
-  # Ensure volume is in valid range
-  if settings.get('volume', 8) < 0:
+  # Ensure volume is in valid range (0-100)
+  if settings.get('volume', 80) < 0:
     settings['volume'] = 0
-  elif settings.get('volume', 8) > 11:
-    settings['volume'] = 11
+  elif settings.get('volume', 80) > 100:
+    settings['volume'] = 100
   
   settingsJSON = settings
   SCREEN_BRIGHTNESS_NORMAL = settings['max_brightness']
@@ -505,12 +505,13 @@ def connectMQTT():
       port=int(mqttCredsJSON['port']),
       user=mqttCredsJSON['username'],
       password=mqttCredsJSON['password'],
-      keepalive=1000,
+      keepalive=60,
       ssl=True,
       ssl_params={"server_hostname": mqttCredsJSON['server']}
     )
     mqtt_client.set_callback(mqtt_callback)
-    mqtt_client.connect()
+    # Connect with persistent session (clean_session=False)
+    mqtt_client.connect(clean_session=False)
     
     # Subscribe to topic
     topic = mqttCredsJSON.get('topic', 'm5stack-notifications/github/all')
@@ -530,8 +531,9 @@ def playNotificationSound(msg_data):
   """Play notification sound based on message status and conclusion"""
   
   try:
-    # Use user's volume setting for notifications
-    M5.Speaker.setVolume(SPEAKER_VOLUME)
+    # Use user's volume setting for notifications (scale 0-100 to 0-255)
+    speaker_volume = int(SPEAKER_VOLUME * 2.55)
+    M5.Speaker.setVolume(speaker_volume)
     
     status = msg_data.get('status')
     conclusion = msg_data.get('conclusion')
@@ -582,7 +584,9 @@ def playClickSound():
   global SPEAKER_VOLUME
   
   try:
-    M5.Speaker.setVolume(SPEAKER_VOLUME)
+    # Scale volume from 0-100 to 0-255
+    speaker_volume = int(SPEAKER_VOLUME * 2.55)
+    M5.Speaker.setVolume(speaker_volume)
     M5.Speaker.tone(1000, 50)
   except Exception as e:
     print(f'ERROR playing click sound: {e}')
@@ -771,7 +775,7 @@ def settings_volume_slider_event(event_struct):
   event = event_struct.code
   if event == lv.EVENT.VALUE_CHANGED:
     try:
-      value = settings_page_volume_slider.get_value()
+      value = settings_page_volume_slider.get_value()  # 0-100
       settingsJSON['volume'] = value
       SPEAKER_VOLUME = value
       
@@ -779,16 +783,17 @@ def settings_volume_slider_event(event_struct):
       if value == 0:
         settings_page_volume_label.set_text('Volume: Muted')
       else:
-        settings_page_volume_label.set_text(f'Volume: {int(value/255*100)}%')
+        settings_page_volume_label.set_text(f'Volume: {value}%')
       
-      # Play test sound
-      M5.Speaker.setVolume(value)
+      # Scale to 0-255 for speaker (M5.Speaker.setVolume expects 0-255)
+      speaker_volume = int(value * 2.55)
+      M5.Speaker.setVolume(speaker_volume)
       M5.Speaker.tone(1000, 100)
       
       # Save to SD card
       saveSettings()
       
-      print(f'Volume updated to {value}')
+      print(f'Volume updated to {value}% (speaker: {speaker_volume}/255)')
     except Exception as e:
       print(f'ERROR in volume slider: {e}')
       sys.print_exception(e)
@@ -809,10 +814,9 @@ def setup():
   M5.Widgets.setRotation(1)
   m5ui.init()
   
-  # Initialize speaker
+  # Initialize speaker (volume will be set after loading settings)
   try:
     M5.Speaker.begin()
-    M5.Speaker.setVolume(255)  # Initialize at maximum volume
     print('Speaker initialized')
   except Exception as e:
     print(f'Speaker initialization: {e}')
@@ -876,8 +880,8 @@ def setup():
   settings_page_volume_slider = lv.slider(settings_page)
   settings_page_volume_slider.set_pos(20, 135)
   settings_page_volume_slider.set_size(280, 10)
-  settings_page_volume_slider.set_range(0, 255)  # 0 (mute) to 255 (max) - M5.Speaker.setVolume() range
-  settings_page_volume_slider.set_value(200, 0)
+  settings_page_volume_slider.set_range(0, 100)  # 0 (mute) to 100 (max)
+  settings_page_volume_slider.set_value(80, 0)
   settings_page_volume_slider.add_event_cb(settings_volume_slider_event, lv.EVENT.ALL, None)
   
   # Create UI elements on khadamaty page
@@ -931,12 +935,17 @@ def setup():
     settings_page_brightness_slider.set_value(settingsJSON.get('max_brightness', 200), 0)
     settings_page_brightness_label.set_text(f"Max Brightness: {int(settingsJSON.get('max_brightness', 200)/255*100)}%")
     
-    volume = settingsJSON.get('volume', 8)
+    volume = settingsJSON.get('volume', 80)  # 0-100 range
     settings_page_volume_slider.set_value(volume, 0)
     if volume == 0:
       settings_page_volume_label.set_text('Volume: Muted')
     else:
-      settings_page_volume_label.set_text(f'Volume: {int(volume/11*100)}%')
+      settings_page_volume_label.set_text(f'Volume: {volume}%')
+    
+    # Set speaker volume from loaded settings (scale 0-100 to 0-255)
+    speaker_volume = int(volume * 2.55)
+    M5.Speaker.setVolume(speaker_volume)
+    print(f'Speaker volume set to {volume}% (speaker: {speaker_volume}/255)')
   
   # Show dashboard
   dashboard_page.screen_load()
