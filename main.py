@@ -10,7 +10,7 @@ Features:
 - Multi-page UI with LVGL
 """
 
-import os, sys, io
+import os, sys
 import M5
 from M5 import BtnA
 from M5 import BtnB
@@ -141,6 +141,13 @@ last_activity_time = None  # type: float
 # Audio settings
 SPEAKER_VOLUME = 200  # Default volume (0-255, will be overridden by settings) - 255 is max
 
+# Loop scheduling (edge-triggered, replaces checkTime() polling which could fire
+# many times per matching second)
+_last_dashboard_update = 0  # type: float
+_last_reconnect_check = 0  # type: float
+DASHBOARD_UPDATE_INTERVAL = 10  # seconds
+RECONNECT_CHECK_INTERVAL = 30  # seconds
+
 
 def reportError(errorMessage):
   """Display error message in UI msgbox"""
@@ -188,16 +195,11 @@ def readSDFile(fileName, returnJSON):
   # No globals needed - all variables are local
   showLoading(True, f'Loading {fileName}')
   try:
+    # Read whole file in one syscall (json.loads ignores surrounding whitespace)
     with open('/sd/' + str(fileName), 'r') as ffile:
-      fileLines = ffile.readlines()
-    
-    fileString = ''
-    for line in fileLines:
-      if len(line.strip()) > 0:
-        fileString += line.strip()
-    
-    fileString = fileString.strip()
-    returnValue = json.loads(fileString) if returnJSON else fileString
+      fileString = ffile.read()
+
+    returnValue = json.loads(fileString) if returnJSON else fileString.strip()
     print(f'Successfully loaded {fileName}')
   except Exception as e:
     print(f'ERROR in readSDFile: {e}')
@@ -329,13 +331,24 @@ def updateGitHubList():
         bg_color = int(msg.get('bgColor', '0xffffff'), 16) if isinstance(msg.get('bgColor'), str) else msg.get('bgColor', 0xffffff)
         
         # Add text to list with colors using simple m5ui method (much faster)
-        label = github_page_list.add_text(display_text[:350], text_c=text_color, bg_c=bg_color)
-        
+        # Cap length to keep each item small (fewer pixels to repaint while scrolling)
+        label = github_page_list.add_text(display_text[:200], text_c=text_color, bg_c=bg_color)
+
         # Add 2px bottom margin to create spacing between items
         try:
           label.set_style_margin_bottom(2, 0)
         except:
           pass
+
+        # Force CLIP long-mode: avoids LVGL re-wrapping the label on every
+        # scroll frame, which is the main source of scroll lag.
+        try:
+          label.set_long_mode(lv.label.LONG.CLIP)
+        except:
+          try:
+            label.set_long_mode(lv.label.LONG_MODE.CLIP)
+          except:
+            pass
         
     print(f'Updated github_page_list with {len(mqttMessages) if mqttMessages else 0} messages')
     
@@ -349,7 +362,7 @@ def loadMQTTMessages():
   
   messages = readSDFile('mqtt-messages.json', True)
   if messages:
-    # Limit to 8 messages for consistency and performance
+    # Limit to 5 messages for consistency and performance
     messages = messages[:5]
     github_page_title.set_text('MQTT Messages Loaded')
   return messages
@@ -431,7 +444,7 @@ def handleGitHubMessage(msg_data):
     # Add new message at the beginning (latest first)
     mqttMessages.insert(0, msg_data)
     
-    # Keep only last 8 messages (reduced from 15 for better performance)
+    # Keep only last 5 messages (reduced from 15 for better performance)
     mqttMessages = mqttMessages[:5]
     
     # Save to SD card
@@ -838,10 +851,23 @@ def setup():
   try:
     github_page_list._list.set_scroll_dir(lv.DIR.VER)  # Only vertical scroll
 
-    # Disable scroll elasticity and momentum for better performance
+    # Disable scroll elasticity, momentum, animation and snap for max scroll perf
     github_page_list._list.remove_flag(lv.obj.FLAG.SCROLL_ELASTIC)
     github_page_list._list.remove_flag(lv.obj.FLAG.SCROLL_MOMENTUM)
-    
+    try:
+      github_page_list._list.remove_flag(lv.obj.FLAG.SCROLL_CHAIN)
+    except:
+      pass
+    try:
+      github_page_list._list.set_scroll_snap_y(lv.SCROLL_SNAP.NONE)
+    except:
+      pass
+    try:
+      # Kill scroll animation (default ~200ms tween causes apparent lag)
+      github_page_list._list.set_style_anim_time(0, 0)
+    except:
+      pass
+
     # Add 2px padding between list items
     github_page_list._list.set_style_pad_row(2, 0)
   except:
@@ -981,9 +1007,10 @@ def loop():
   """Main application loop - runs continuously"""
   global wlan_sta, mqtt_client, dashboard_page_label_wifi_status, dashboard_page_label_mqtt_status, dashboard_page_label_msg_count
   global dashboard_page_label_ip_address, dashboard_page_label_wifi_strength, dashboard_page_label_battery, wifiCredsJSON, mqttCredsJSON
-  global last_activity_time
-  
+  global last_activity_time, _last_dashboard_update, _last_reconnect_check
+
   M5.update()
+  now = time.time()
   
   # Check for screen touch to wake display
   if M5.Touch.getCount() > 0:
@@ -1028,8 +1055,9 @@ def loop():
       # Mark client as disconnected on error
       mqtt_client = None
   
-  # Update dashboard info every 10 seconds
-  if checkTime(10):
+  # Update dashboard info every 10 seconds (edge-triggered)
+  if (now - _last_dashboard_update) >= DASHBOARD_UPDATE_INTERVAL:
+    _last_dashboard_update = now
     # Update connection status
     wifi_status = 'Connected' if wlan_sta.isconnected() else 'Disconnected'
     mqtt_status = 'Connected' if mqtt_client else 'Disconnected'
@@ -1093,7 +1121,8 @@ def loop():
       dashboard_page_label_wifi_strength.set_text('Signal: Not connected')
   
   # Check WiFi and MQTT connection every 30 seconds for reconnection
-  if checkTime(30):
+  if (now - _last_reconnect_check) >= RECONNECT_CHECK_INTERVAL:
+    _last_reconnect_check = now
     # Reconnect WiFi if disconnected
     if not wlan_sta.isconnected() and wifiCredsJSON:
       print('WiFi disconnected, reconnecting...')
