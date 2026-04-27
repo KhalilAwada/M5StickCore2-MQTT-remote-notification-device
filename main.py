@@ -352,13 +352,12 @@ def updateGitHubList():
         except:
           pass
 
-        # Force CLIP long-mode: avoids LVGL re-wrapping the label on every
-        # scroll frame, which is the main source of scroll lag.
+        # WRAP long-mode: show full text across multiple lines.
         try:
-          label.set_long_mode(lv.label.LONG.CLIP)
+          label.set_long_mode(lv.label.LONG.WRAP)
         except:
           try:
-            label.set_long_mode(lv.label.LONG_MODE.CLIP)
+            label.set_long_mode(lv.label.LONG_MODE.WRAP)
           except:
             pass
         
@@ -533,13 +532,27 @@ def connectMQTT():
       ssl_params={"server_hostname": mqttCredsJSON['server']}
     )
     mqtt_client.set_callback(mqtt_callback)
-    # Connect with persistent session (clean_session=False)
+    # Connect with persistent session (clean_session=False) so the broker
+    # queues messages published while the device was offline and replays
+    # them immediately on reconnection.
     mqtt_client.connect(clean_session=False)
-    
+
     # Subscribe to topic
     topic = mqttCredsJSON.get('topic', 'm5stack-notifications/github/all')
     mqtt_client.subscribe(topic)
     print(f'MQTT connected and subscribed to {topic}')
+
+    # Drain any messages the broker queued while we were offline.
+    # check_msg() is non-blocking and returns None when the queue is empty.
+    # We cap at 10 iterations to bound time spent here on first connect.
+    showLoading(True, 'Fetching queued messages...')
+    for _ in range(10):
+      try:
+        if mqtt_client.check_msg() is None:
+          break
+      except:
+        break
+
     showLoading(False, '')
     return True
     
