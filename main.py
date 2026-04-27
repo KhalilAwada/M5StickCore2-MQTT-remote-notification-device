@@ -329,6 +329,18 @@ def updateGitHubList():
         # Get colors from message
         text_color = int(msg.get('color', '0x000000'), 16) if isinstance(msg.get('color'), str) else msg.get('color', 0x000000)
         bg_color = int(msg.get('bgColor', '0xffffff'), 16) if isinstance(msg.get('bgColor'), str) else msg.get('bgColor', 0xffffff)
+
+        # Grafana alert: enforce red (firing) / green (resolved) colors only when
+        # the publisher did not provide explicit color/bgColor. This keeps the
+        # status visually unambiguous while still honoring any explicit override.
+        if msg.get('messageGroup') == 'grafana':
+          status = msg.get('status')
+          if status == 'firing' and 'bgColor' not in msg:
+            bg_color = 0xff6666
+          elif status == 'resolved' and 'bgColor' not in msg:
+            bg_color = 0x66cc66
+          if 'color' not in msg:
+            text_color = 0x000000
         
         # Add text to list with colors using simple m5ui method (much faster)
         # Cap length to keep each item small (fewer pixels to repaint while scrolling)
@@ -389,9 +401,11 @@ def handleMQTTMessage(topic, message):
     # Try to parse message as JSON
     msg_data = json.loads(message)
     
-    # Check if this is a GitHub event message
-    if isinstance(msg_data, dict) and msg_data.get('messageType') == 'event' and msg_data.get('messageGroup') == 'github':
-      handleGitHubMessage(msg_data)
+    # Check if this is an event message we cache in the messages list
+    # (currently: github events and grafana alerts)
+    if isinstance(msg_data, dict) and msg_data.get('messageType') == 'event' \
+        and msg_data.get('messageGroup') in ('github', 'grafana'):
+      handleEventMessage(msg_data)
     else:
       # Handle other message types
       if isinstance(msg_data, dict):
@@ -413,57 +427,53 @@ def handleMQTTMessage(topic, message):
     sys.print_exception(e)
 
 
-def handleGitHubMessage(msg_data):
+def handleEventMessage(msg_data):
   """
-  Handle GitHub event messages with caching and deduplication
+  Handle event messages (github / grafana) with caching and deduplication.
+  Both message groups share the same cache, list, dedup-by-id and SD persistence.
   Args:
     msg_data: Parsed message data dict
   """
   global mqttMessages, github_page_title
-  
+
   try:
-    # Extract unique ID
+    group = msg_data.get('messageGroup', 'event')
+
+    # Extract unique ID (required for dedup; both github and grafana provide it)
     msg_id = msg_data.get('id')
     if not msg_id:
-      print('WARNING: GitHub message has no id field')
+      print(f'WARNING: {group} message has no id field')
       return
-    
+
     # Wake screen on new message
     wakeScreen()
-    
+
     # Play notification sound
     playNotificationSound(msg_data)
-    
+
     # Initialize mqttMessages if needed
     if mqttMessages is None:
       mqttMessages = []
-    
+
     # Remove existing message with same ID (to override)
     mqttMessages = [m for m in mqttMessages if m.get('id') != msg_id]
-    
+
     # Add new message at the beginning (latest first)
     mqttMessages.insert(0, msg_data)
-    
+
     # Keep only last 5 messages (reduced from 15 for better performance)
     mqttMessages = mqttMessages[:5]
-    
+
     # Save to SD card
     saveMQTTMessagesToSD()
-    
-    # Update the github list with latest messages
+
+    # Update the list with latest messages (shared between github & grafana)
     updateGitHubList()
-    
-    # Update UI
-    if 'lines' in msg_data and len(msg_data['lines']) > 0:
-      display_text = '\n'.join(msg_data['lines'][:3])  # Show first 3 lines
-      # github_page_title.set_text(display_text[:50])
-    # else:
-      # github_page_title.set_text(f"GitHub: {msg_data.get('repository', 'event')}")
-    
-    print(f"GitHub message cached: ID={msg_id}, Total messages={len(mqttMessages)}")
-    
+
+    print(f"{group} message cached: ID={msg_id}, Total messages={len(mqttMessages)}")
+
   except Exception as e:
-    print(f'ERROR in handleGitHubMessage: {e}')
+    print(f'ERROR in handleEventMessage: {e}')
     sys.print_exception(e)
 
 
@@ -550,8 +560,27 @@ def playNotificationSound(msg_data):
     
     status = msg_data.get('status')
     conclusion = msg_data.get('conclusion')
-    
-    if status == 'completed' and conclusion == 'success':
+    group = msg_data.get('messageGroup')
+
+    if group == 'grafana' and status == 'firing':
+      # Urgent alert - rapid descending alarm pattern
+      M5.Speaker.tone(1200, 120)
+      time.sleep(0.12)
+      M5.Speaker.tone(800, 120)
+      time.sleep(0.12)
+      M5.Speaker.tone(1200, 120)
+      time.sleep(0.12)
+      M5.Speaker.tone(800, 120)
+      time.sleep(0.12)
+      M5.Speaker.tone(1200, 200)
+    elif group == 'grafana' and status == 'resolved':
+      # Relief sound - calm ascending resolution
+      M5.Speaker.tone(523, 120)  # C
+      time.sleep(0.12)
+      M5.Speaker.tone(659, 120)  # E
+      time.sleep(0.12)
+      M5.Speaker.tone(784, 200)  # G
+    elif status == 'completed' and conclusion == 'success':
       # Happy sound - cheerful ascending melody
       M5.Speaker.tone(523, 100)  # C
       time.sleep(0.1)
@@ -585,7 +614,7 @@ def playNotificationSound(msg_data):
       time.sleep(0.1)
       M5.Speaker.tone(1047, 150)  # C (high)
     
-    print(f'Played notification sound: status={status}, conclusion={conclusion}')
+    print(f'Played notification sound: group={group}, status={status}, conclusion={conclusion}')
     
   except Exception as e:
     print(f'ERROR playing notification sound: {e}')
